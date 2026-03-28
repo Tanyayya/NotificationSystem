@@ -94,6 +94,8 @@ services:
       start_period: 5s
 
   redis-subscriber:
+    profiles:
+      - test
     build:
       context: .
       dockerfile: Dockerfile

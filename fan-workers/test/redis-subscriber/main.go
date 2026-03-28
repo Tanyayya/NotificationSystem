@@ -1,3 +1,6 @@
+// Command redis-subscriber is a local test harness: it listens on every notification
+// channel by pattern-subscribing to notif:* (all user-specific channels), and logs
+// payloads so we can verify Redis publishes from the worker without a per-user client.
 package main
 
 import (
@@ -26,6 +29,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// PSUBSCRIBE notif:* matches all channels (e.g. notif:user-123); production code
+	// typically subscribes to one user channel instead.
 	pubsub := rdb.PSubscribe(ctx, "notif:*")
 	defer func() {
 		if err := pubsub.Close(); err != nil {

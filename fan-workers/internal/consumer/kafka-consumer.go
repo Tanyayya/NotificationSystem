@@ -51,6 +51,7 @@ func Run(ctx context.Context, brokers []string, topic, groupID string, defaultUs
 			m.Partition, m.Offset, string(m.Key), string(m.Value),
 		)
 
+		// Prefer the message key as user id; fall back when producers omit the key.
 		userID := defaultUserID
 		if len(m.Key) > 0 {
 			userID = string(m.Key)

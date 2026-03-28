@@ -4,7 +4,7 @@ Consumer workers live under `src/worker`. After each Kafka message, the worker p
 
 Run Docker Compose from the [`fan-workers`](.) directory (or pass `-f fan-workers/docker-compose.yml` from the repo root).
 
-## Setup (3 workers, no kafka-producer)
+## Setup (3 workers, core stack)
 
 Requires Docker and Docker Compose v2.
 
@@ -13,7 +13,7 @@ cd fan-workers
 docker compose up --build --scale worker=3
 ```
 
-This starts **Redis** (`redis`), the **redis-subscriber** service, Kafka, and workers. Wait until Kafka is healthy (first boot can take about a minute). `kafka-init` creates the topic with **3 partitions** so each worker can consume a different partition in the same consumer group. Redis is exposed on **6379** on the host for debugging.
+This starts **Redis** (`redis`), Kafka, and workers. Wait until Kafka is healthy (first boot can take about a minute). `kafka-init` creates the topic with **3 partitions** so each worker can consume a different partition in the same consumer group. Redis is exposed on **6379** on the host for debugging.
 
 ### Worker and Redis environment (Compose defaults)
 
@@ -25,20 +25,20 @@ This starts **Redis** (`redis`), the **redis-subscriber** service, Kafka, and wo
 | `NOTIFY_FROM_USER` | JSON `from_user` field |
 | `NOTIFY_MESSAGE` | JSON `message` field |
 
-The **redis-subscriber** service sets `REDIS_ADDR=redis:6379` only.
+## Setup with test helpers (kafka-producer, redis-subscriber)
 
-## Setup with kafka-producer (test profile)
-
-To also start the **kafka-producer** service on port **8081**, enable the `test` profile:
+To also start the **kafka-producer** service on port **8081** and the **redis-subscriber** container (pattern-subscribes to `notif:*` and logs messages), enable the `test` profile:
 
 ```bash
 cd fan-workers
 docker compose --profile test up --build --scale worker=3
 ```
 
+The **redis-subscriber** service sets `REDIS_ADDR=redis:6379` only.
+
 ## Testing
 
-The kafka-producer HTTP API at `http://localhost:8081` is only available when you started the stack with **`--profile test`** (see above).
+The **kafka-producer** HTTP API at `http://localhost:8081` and the **redis-subscriber** subscriber are only started when you use **`--profile test`** (see above).
 
 **Health**
 
