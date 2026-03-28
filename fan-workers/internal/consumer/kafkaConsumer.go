@@ -10,8 +10,14 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
+// Notifier publishes to Redis after a Kafka message is processed.
+type Notifier interface {
+	Publish(ctx context.Context, userID string) error
+}
+
 // Run reads messages from the given topic until the context is cancelled.
-func Run(ctx context.Context, brokers []string, topic, groupID string) error {
+// defaultUserID is used when the Kafka message has no key. On Redis publish failure, the error is logged and the message is still committed.
+func Run(ctx context.Context, brokers []string, topic, groupID string, defaultUserID string, n Notifier) error {
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:  brokers,
 		Topic:    topic,
@@ -44,6 +50,14 @@ func Run(ctx context.Context, brokers []string, topic, groupID string) error {
 			"kafka message partition=%d offset=%d key=%q value=%s",
 			m.Partition, m.Offset, string(m.Key), string(m.Value),
 		)
+
+		userID := defaultUserID
+		if len(m.Key) > 0 {
+			userID = string(m.Key)
+		}
+		if err := n.Publish(ctx, userID); err != nil {
+			log.Printf("redis publish userID=%q: %v", userID, err)
+		}
 
 		if err := r.CommitMessages(ctx, m); err != nil {
 			log.Printf("kafka commit: %v", err)

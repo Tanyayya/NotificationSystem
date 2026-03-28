@@ -14,11 +14,19 @@ import (
 
 	"test-distributed-systems-project/internal/config"
 	"test-distributed-systems-project/internal/consumer"
+	"test-distributed-systems-project/internal/notif"
 )
 
 func main() {
 	cfg := config.Load()
 	gin.SetMode(cfg.GinMode)
+
+	pub := notif.NewPublisher(cfg.RedisAddr, cfg.NotifyType, cfg.NotifyFromUser, cfg.NotifyMessage)
+	defer func() {
+		if err := pub.Close(); err != nil {
+			log.Printf("redis close: %v", err)
+		}
+	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -46,7 +54,7 @@ func main() {
 	// Run reads messages from the given topic until the context is cancelled.
 	consumerDone := make(chan error, 1)
 	go func() {
-		consumerDone <- consumer.Run(ctx, cfg.Brokers, cfg.Topic, cfg.GroupID)
+		consumerDone <- consumer.Run(ctx, cfg.Brokers, cfg.Topic, cfg.GroupID, cfg.NotifyDefaultUserID, pub)
 	}()
 
 	<-ctx.Done()

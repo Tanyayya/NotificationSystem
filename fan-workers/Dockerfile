@@ -9,7 +9,8 @@ RUN go mod download
 COPY . .
 ARG CGO_ENABLED=0
 RUN go build -trimpath -ldflags="-s -w" -o /out/worker ./src/worker \
-    && go build -trimpath -ldflags="-s -w" -o /out/producer ./test/producer
+    && go build -trimpath -ldflags="-s -w" -o /out/producer ./test/producer \
+    && go build -trimpath -ldflags="-s -w" -o /out/redis-subscriber ./test/redis-subscriber
 
 FROM alpine:3.20 AS worker
 RUN apk add --no-cache ca-certificates tzdata wget \
@@ -33,3 +34,11 @@ ENV HTTP_ADDR=:8081
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
     CMD wget -q -O- http://127.0.0.1:8081/health >/dev/null || exit 1
 ENTRYPOINT ["/producer"]
+
+FROM alpine:3.20 AS redis-subscriber
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -g 65532 -S app && adduser -u 65532 -S -G app app
+
+COPY --from=build /out/redis-subscriber /redis-subscriber
+USER app:app
+ENTRYPOINT ["/redis-subscriber"]

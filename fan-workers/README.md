@@ -1,6 +1,6 @@
 # Kafka fan-out workers (Go)
 
-Consumer workers live under `src/worker`. The optional Kafka HTTP producer for load and manual publishes lives under `test/producer` (same Go module and `internal/` packages).
+Consumer workers live under `src/worker`. After each Kafka message, the worker publishes a JSON notification to **Redis Pub/Sub** on channel `notif:{userID}` (Kafka message key, or `NOTIFY_DEFAULT_USER_ID` when the key is empty). The optional Kafka HTTP producer for load and manual publishes lives under `test/producer`. A small **Redis subscriber** under `test/redis-subscriber` pattern-subscribes to `notif:*` and logs incoming messages (same Go module and `internal/` packages).
 
 Run Docker Compose from the [`fan-workers`](.) directory (or pass `-f fan-workers/docker-compose.yml` from the repo root).
 
@@ -13,7 +13,19 @@ cd fan-workers
 docker compose up --build --scale worker=3
 ```
 
-Wait until Kafka is healthy (first boot can take about a minute). `kafka-init` creates the topic with **3 partitions** so each worker can consume a different partition in the same consumer group.
+This starts **Redis** (`redis`), the **redis-subscriber** service, Kafka, and workers. Wait until Kafka is healthy (first boot can take about a minute). `kafka-init` creates the topic with **3 partitions** so each worker can consume a different partition in the same consumer group. Redis is exposed on **6379** on the host for debugging.
+
+### Worker and Redis environment (Compose defaults)
+
+| Variable | Purpose |
+| -------- | ------- |
+| `REDIS_ADDR` | Redis address (default in code: `localhost:6379`; Compose sets `redis:6379`) |
+| `NOTIFY_DEFAULT_USER_ID` | User id for `notif:{userID}` when the Kafka message has no key |
+| `NOTIFY_TYPE` | JSON `type` field (default `new_post`) |
+| `NOTIFY_FROM_USER` | JSON `from_user` field |
+| `NOTIFY_MESSAGE` | JSON `message` field |
+
+The **redis-subscriber** service sets `REDIS_ADDR=redis:6379` only.
 
 ## Setup with the Kafka producer (test profile)
 
@@ -34,13 +46,17 @@ The producer API at `http://localhost:8081` is only available when you started t
 curl -s http://localhost:8081/health
 ```
 
-**Publish a message** (expect `202` and workers logging the payload)
+**Publish a message** (expect `202`, workers logging the Kafka payload, then Redis `PUBLISH` to `notif:{userID}` with body `{"type":"new_post","from_user":"…","message":"…"}`. The **redis-subscriber** logs `channel=notif:…` and the payload.)
+
+Use `key` as the recipient user id (e.g. `bob` → channel `notif:bob`):
 
 ```bash
 curl -s -X POST http://localhost:8081/messages \
   -H 'Content-Type: application/json' \
-  -d '{"message":"hello from curl","key":"optional-partition-key"}'
+  -d '{"message":"hello from curl","key":"bob"}'
 ```
+
+Without `key`, the worker uses `NOTIFY_DEFAULT_USER_ID` (Compose default `default` → `notif:default`).
 
 **Load ramp** (~30 seconds; linear rate increase to `peak_mps`)
 

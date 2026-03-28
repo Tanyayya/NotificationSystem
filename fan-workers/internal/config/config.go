@@ -8,11 +8,16 @@ import (
 
 // Config holds runtime settings loaded from the environment.
 type Config struct {
-	HTTPAddr string
-	Brokers  []string
-	Topic    string
-	GroupID  string
-	GinMode  string
+	HTTPAddr            string
+	Brokers             []string
+	Topic               string
+	GroupID             string
+	GinMode             string
+	RedisAddr           string
+	NotifyDefaultUserID string
+	NotifyType          string
+	NotifyFromUser      string
+	NotifyMessage       string
 }
 
 // ProducerConfig holds producer-only settings.
@@ -27,11 +32,16 @@ type ProducerConfig struct {
 // Load reads configuration from environment variables with sensible defaults.
 func Load() Config {
 	return Config{
-		HTTPAddr: getEnv("HTTP_ADDR", ":8080"),
-		Brokers:  parseBrokers(),
-		Topic:    getEnv("KAFKA_TOPIC", "worker-events"),
-		GroupID:  getEnv("KAFKA_GROUP_ID", "worker-skeleton"),
-		GinMode:  getEnv("GIN_MODE", "release"),
+		HTTPAddr:            getEnv("HTTP_ADDR", ":8080"),
+		Brokers:             parseBrokers(),
+		Topic:               getEnv("KAFKA_TOPIC", "worker-events"),
+		GroupID:             getEnv("KAFKA_GROUP_ID", "worker-skeleton"),
+		GinMode:             getEnv("GIN_MODE", "release"),
+		RedisAddr:           getEnv("REDIS_ADDR", "localhost:6379"),
+		NotifyDefaultUserID: getEnv("NOTIFY_DEFAULT_USER_ID", "default"),
+		NotifyType:          getEnv("NOTIFY_TYPE", "new_post"),
+		NotifyFromUser:      getEnv("NOTIFY_FROM_USER", "alice"),
+		NotifyMessage:       getEnv("NOTIFY_MESSAGE", "Alice posted a photo"),
 	}
 }
 
