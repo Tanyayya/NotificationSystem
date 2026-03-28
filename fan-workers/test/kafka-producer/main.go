@@ -217,7 +217,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("producer http listening on %s (topic=%q)", cfg.HTTPAddr, cfg.Topic)
+		log.Printf("kafka-producer http listening on %s (topic=%q)", cfg.HTTPAddr, cfg.Topic)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("http server: %v", err)
 		}

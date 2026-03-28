@@ -104,13 +104,13 @@ services:
       redis:
         condition: service_healthy
 
-  producer:
+  kafka-producer:
     profiles:
       - test
     build:
       context: .
       dockerfile: Dockerfile
-      target: producer
+      target: kafka-producer
     environment:
       KAFKA_BROKERS: kafka:29092
       KAFKA_TOPIC: worker-events

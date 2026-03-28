@@ -1,10 +1,10 @@
-# Kafka fan-out workers (Go)
+# Fan-out workers (Go)
 
-Consumer workers live under `src/worker`. After each Kafka message, the worker publishes a JSON notification to **Redis Pub/Sub** on channel `notif:{userID}` (Kafka message key, or `NOTIFY_DEFAULT_USER_ID` when the key is empty). The optional Kafka HTTP producer for load and manual publishes lives under `test/producer`. A small **Redis subscriber** under `test/redis-subscriber` pattern-subscribes to `notif:*` and logs incoming messages (same Go module and `internal/` packages).
+Consumer workers live under `src/worker`. After each Kafka message, the worker publishes a JSON notification to **Redis Pub/Sub** on channel `notif:{userID}` (Kafka message key, or `NOTIFY_DEFAULT_USER_ID` when the key is empty). The optional Kafka HTTP producer for load and manual publishes lives under `test/kafka-producer`. A small **Redis subscriber** under `test/redis-subscriber` pattern-subscribes to `notif:*` and logs incoming messages (same Go module and `internal/` packages).
 
 Run Docker Compose from the [`fan-workers`](.) directory (or pass `-f fan-workers/docker-compose.yml` from the repo root).
 
-## Setup (3 workers, no producer)
+## Setup (3 workers, no kafka-producer)
 
 Requires Docker and Docker Compose v2.
 
@@ -27,9 +27,9 @@ This starts **Redis** (`redis`), the **redis-subscriber** service, Kafka, and wo
 
 The **redis-subscriber** service sets `REDIS_ADDR=redis:6379` only.
 
-## Setup with the Kafka producer (test profile)
+## Setup with kafka-producer (test profile)
 
-To also start the HTTP producer on port **8081**, enable the `test` profile:
+To also start the **kafka-producer** service on port **8081**, enable the `test` profile:
 
 ```bash
 cd fan-workers
@@ -38,7 +38,7 @@ docker compose --profile test up --build --scale worker=3
 
 ## Testing
 
-The producer API at `http://localhost:8081` is only available when you started the stack with **`--profile test`** (see above).
+The kafka-producer HTTP API at `http://localhost:8081` is only available when you started the stack with **`--profile test`** (see above).
 
 **Health**
 
