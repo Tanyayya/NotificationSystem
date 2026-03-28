@@ -8,8 +8,8 @@ RUN go mod download
 
 COPY . .
 ARG CGO_ENABLED=0
-RUN go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker \
-    && go build -trimpath -ldflags="-s -w" -o /out/producer ./cmd/producer
+RUN go build -trimpath -ldflags="-s -w" -o /out/worker ./src/worker \
+    && go build -trimpath -ldflags="-s -w" -o /out/producer ./src/producer
 
 FROM alpine:3.20 AS worker
 RUN apk add --no-cache ca-certificates tzdata wget \
