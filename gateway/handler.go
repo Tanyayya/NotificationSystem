@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -38,9 +39,10 @@ type conn struct {
 // Flow:
 //  1. Read user_id from the query param (?user_id=123)
 //  2. Upgrade the HTTP connection to WebSocket
-//  3. Spawn 2 goroutines: one reader, one writer
-//  4. Block until both goroutines exit (i.e. client disconnects)
-//  5. Clean up (Redis deregistration added in Task 2)
+//  3. Register user in Redis (ws:user:{userID} → taskID)
+//  4. Spawn 2 goroutines: one reader, one writer
+//  5. Block until both goroutines exit (i.e. client disconnects)
+//  6. Deregister user from Redis
 func HandleWS(w http.ResponseWriter, r *http.Request) {
 	// Extract user_id from query params — e.g. ws://localhost:8080/ws?user_id=123
 	userID := r.URL.Query().Get("user_id")
@@ -68,10 +70,23 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 		cancel:  cancel,
 	}
 
+	// TASK_ID identifies this gateway instance in Redis.
+	// On ECS this will be set to the task ARN or IP so workers know exactly
+	// which gateway to route through. Falls back to "local" for local dev.
+	taskID := os.Getenv("TASK_ID")
+	if taskID == "" {
+		taskID = "local"
+	}
+
+	// Register the user in Redis immediately after connecting
+	if err := registerUser(ctx, userID, taskID); err != nil {
+		log.Printf("failed to register user %s: %v", userID, err)
+	}
+
 	log.Printf("user %s connected", userID)
 
 	// WaitGroup ensures HandleWS blocks until both goroutines have fully exited
-	// before we run cleanup (deregister from Redis in Task 2)
+	// before we run cleanup
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -84,7 +99,7 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Reader goroutine — listens for incoming messages from the client.
 	// Its main job is detecting disconnects and triggering cancel()
-	// so the writer and any future goroutines (Task 3) also shut down.
+	// so the writer shuts down too.
 	go func() {
 		defer wg.Done()
 		c.reader(ctx)
@@ -92,8 +107,12 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Block here until both goroutines exit
 	wg.Wait()
+
+	// Deregister the user from Redis now that the connection is gone
 	log.Printf("user %s disconnected, cleaning up", userID)
-	// TODO Task 2: deregister user from Redis here
+	if err := deregisterUser(context.Background(), userID); err != nil {
+		log.Printf("failed to deregister user %s: %v", userID, err)
+	}
 }
 
 // writer drains writeCh and sends each message to the WebSocket client.

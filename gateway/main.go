@@ -6,6 +6,11 @@ import (
 )
 
 func main() {
+	// Initialize Redis connection before accepting any WebSocket connections.
+	// This will fatal if Redis is unreachable — better to fail fast on startup
+	// than to discover Redis is down mid-connection.
+	initRedis()
+
 	// /ws is the WebSocket endpoint — clients connect here to receive real-time notifications
 	// HandleWS is defined in handler.go
 	http.HandleFunc("/ws", HandleWS)
