@@ -77,6 +77,8 @@ services:
         condition: service_completed_successfully
 
   producer:
+    profiles:
+      - test
     build:
       context: .
       dockerfile: Dockerfile

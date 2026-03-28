@@ -43,6 +43,7 @@ func main() {
 		}
 	}()
 
+	// Run reads messages from the given topic until the context is cancelled.
 	consumerDone := make(chan error, 1)
 	go func() {
 		consumerDone <- consumer.Run(ctx, cfg.Brokers, cfg.Topic, cfg.GroupID)
