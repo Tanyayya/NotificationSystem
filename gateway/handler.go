@@ -88,7 +88,7 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 	// WaitGroup ensures HandleWS blocks until both goroutines have fully exited
 	// before we run cleanup
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 
 	// Writer goroutine — the ONLY goroutine allowed to call ws.WriteMessage.
 	// It drains writeCh and sends each message to the client.
@@ -99,10 +99,18 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Reader goroutine — listens for incoming messages from the client.
 	// Its main job is detecting disconnects and triggering cancel()
-	// so the writer shuts down too.
+	// so the writer and subscriber shut down too.
 	go func() {
 		defer wg.Done()
 		c.reader(ctx)
+	}()
+
+	// Subscriber goroutine — listens on Redis Pub/Sub for notif:{userID}
+	// and forwards any incoming messages to writeCh for delivery to the client.
+	// Defined in pubsub.go.
+	go func() {
+		defer wg.Done()
+		subscribeNotifications(ctx, userID, c.writeCh)
 	}()
 
 	// Block here until both goroutines exit
