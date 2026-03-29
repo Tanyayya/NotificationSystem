@@ -5,14 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/Tanyayya/NotificationSystem/fanout/internal/consumer"
 	"github.com/redis/go-redis/v9"
 )
 
 // Payload is the JSON body published to Redis channels notif:{userID}.
 type Payload struct {
-	Type     string `json:"type"`
-	FromUser string `json:"from_user"`
-	Message  string `json:"message"`
+	ID        int64  `json:"id"`
+	Type      string `json:"type"`
+	FromUser  string `json:"from_user"`
+	Message   string `json:"message"`
+	Timestamp int64  `json:"timestamp"` // Unix milliseconds
 }
 
 // Publisher sends fixed-shape notifications to Redis Pub/Sub.
@@ -38,9 +41,16 @@ func (p *Publisher) Close() error {
 	return p.rdb.Close()
 }
 
-// Publish sends the configured payload to channel notif:{userID}.
-func (p *Publisher) Publish(ctx context.Context, userID string) error {
-	body, err := json.Marshal(p.payload)
+// Publish sends a notification derived from the Kafka event to channel notif:{userID}.
+// FromUser comes from worker config; id, type, message (detail), and timestamp come from the event.
+func (p *Publisher) Publish(ctx context.Context, userID string, ev consumer.NotificationEvent) error {
+	body, err := json.Marshal(Payload{
+		ID:        ev.ID,
+		Type:      ev.Type,
+		FromUser:  p.payload.FromUser,
+		Message:   ev.Detail,
+		Timestamp: ev.Timestamp,
+	})
 	if err != nil {
 		return fmt.Errorf("marshal notification: %w", err)
 	}

@@ -22,21 +22,11 @@ import (
 const loadRampDuration = 30 * time.Second
 
 type publishRequest struct {
-	Message string `json:"message" binding:"required"`
-	Key     string `json:"key,omitempty"`
-}
-
-type outboundPayload struct {
-	Timestamp time.Time `json:"ts"`
-	Message   string    `json:"message"`
-}
-
-type rampPayload struct {
-	Timestamp time.Time `json:"ts"`
-	Message   string    `json:"message"`
-	LoadRunID string    `json:"load_run_id"`
-	Seq       int64     `json:"seq"`
-	ElapsedMs int64     `json:"elapsed_ms"`
+	ID        int64 `json:"id"`
+	Type      string `json:"type" binding:"required"`
+	Detail    string `json:"detail" binding:"required"`
+	Timestamp int64 `json:"timestamp"`
+	Key       string `json:"key,omitempty"`
 }
 
 // runLoadRamp sends messages for loadRampDuration with instantaneous rate λ(t) = peak * (t/T),
@@ -79,12 +69,17 @@ func runLoadRamp(ctx context.Context, w *kafka.Writer, peak float64, runID strin
 			msgs := make([]kafka.Message, 0, need)
 			for i := int64(0); i < need; i++ {
 				seq := sent + i + 1
-				body, mErr := json.Marshal(rampPayload{
-					Timestamp: time.Now().UTC(),
-					Message:   "load ramp",
-					LoadRunID: runID,
-					Seq:       seq,
-					ElapsedMs: time.Since(start).Milliseconds(),
+				ts := time.Now().UnixMilli()
+				body, mErr := json.Marshal(struct {
+					ID        int64  `json:"id"`
+					Type      string `json:"type"`
+					Detail    string `json:"detail"`
+					Timestamp int64  `json:"timestamp"`
+				}{
+					ID:        time.Now().UnixNano() + seq,
+					Type:      "Post",
+					Detail:    fmt.Sprintf("load ramp run=%s seq=%d elapsed_ms=%d", runID, seq, time.Since(start).Milliseconds()),
+					Timestamp: ts,
 				})
 				if mErr != nil {
 					return sent, fmt.Errorf("encode ramp payload: %w", mErr)
@@ -141,9 +136,24 @@ func main() {
 			return
 		}
 
-		body, err := json.Marshal(outboundPayload{
-			Timestamp: time.Now().UTC(),
-			Message:   req.Message,
+		id := req.ID
+		if id == 0 {
+			id = time.Now().UnixNano()
+		}
+		ts := req.Timestamp
+		if ts == 0 {
+			ts = time.Now().UnixMilli()
+		}
+		body, err := json.Marshal(struct {
+			ID        int64  `json:"id"`
+			Type      string `json:"type"`
+			Detail    string `json:"detail"`
+			Timestamp int64  `json:"timestamp"`
+		}{
+			ID:        id,
+			Type:      req.Type,
+			Detail:    req.Detail,
+			Timestamp: ts,
 		})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "encode payload"})
