@@ -18,7 +18,7 @@ This brings up Redis, Kafka, and the fan-out workers (first Kafka boot can take 
 
 | Layer | Role |
 |--------|------|
-| **Event Ingestion API** (Go) | `POST /event`; Snowflake IDs for ordering; events published to **Kafka** partitioned by recipient for per-user ordering. |
+| **Event Ingestion API** (Go) | `POST /event`; Snowflake IDs for ordering; events published to **Kafka** partitioned by sender id for per-user ordering. |
 | **Fan-out Workers** (Go) | Consume Kafka; **hybrid fan-out**—write path for typical users, read path for high-follower accounts; crossover threshold tuned empirically. |
 | **Redis** | Pub/Sub for cross-instance delivery; sorted sets for paginated history (`ZADD` / `ZREVRANGE`); atomic counters for unread badges (`INCR` / `DECR`). |
 | **WebSocket Gateway** (Go) | One goroutine per connection on ECS; user→gateway mapping in Redis; offline users get backlog replay from **PostgreSQL** on reconnect. |
