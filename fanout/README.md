@@ -1,19 +1,17 @@
 # Fan-out workers (Go)
 
-Consumer workers live under `/worker`. After each Kafka message, the worker publishes a JSON notification to **Redis Pub/Sub** on channel `notif:{userID}` (Kafka message key, or `NOTIFY_DEFAULT_USER_ID` when the key is empty). The optional Kafka HTTP producer for load and manual publishes lives under `test/kafka-producer`. A small **Redis subscriber** under `test/redis-subscriber` pattern-subscribes to `notif:*` and logs incoming messages (same Go module and `internal/` packages).
+Fan out workers live under `/worker`. After each Kafka message, the worker publishes a JSON notification to **Redis Pub/Sub** on channel `notif:{userID}` (Kafka message key, or `NOTIFY_DEFAULT_USER_ID` when the key is empty). For testing, there is an optional Kafka HTTP producer for load and manual publishes that lives under `test/kafka-producer`. A small **Redis subscriber** under `test/redis-subscriber` pattern-subscribes to `notif:*` and logs all incoming messages (same Go module and `internal/` packages).
 
-Run Docker Compose from the [`fan-workers`](.) directory (or pass `-f fan-workers/docker-compose.yml` from the repo root).
 
-## Setup (3 workers, core stack)
+## Regular Setup (3 workers, core stack)
 
 Requires Docker and Docker Compose v2.
 
 ```bash
-cd fan-workers
-docker compose up --build --scale worker=3
+docker compose up --build
 ```
 
-This starts **Redis** (`redis`), Kafka, and workers. Wait until Kafka is healthy (first boot can take about a minute). `kafka-init` creates the topic with **3 partitions** so each worker can consume a different partition in the same consumer group. Redis is exposed on **6379** on the host for debugging.
+This starts **Redis** (`redis`), Kafka, and **3 workers**. Wait until Kafka is healthy (first boot can take about a minute). `kafka-init` creates the topic with **3 partitions** so each worker can consume a different partition in the same consumer group. Redis is exposed on **6379** on the host for debugging.
 
 ### Worker and Redis environment (Compose defaults)
 
@@ -25,13 +23,12 @@ This starts **Redis** (`redis`), Kafka, and workers. Wait until Kafka is healthy
 | `NOTIFY_FROM_USER` | JSON `from_user` field |
 | `NOTIFY_MESSAGE` | JSON `message` field |
 
-## Setup with test helpers (kafka-producer, redis-subscriber)
+## Test Setup (include kafka-producer, redis-subscriber)
 
 To also start the **kafka-producer** service on port **8081** and the **redis-subscriber** container (pattern-subscribes to `notif:*` and logs messages), enable the `test-fanout` profile:
 
 ```bash
-cd fan-workers
-docker compose --profile test-fanout up --build --scale worker=3
+docker compose --profile test-fanout up --build
 ```
 
 The **redis-subscriber** service sets `REDIS_ADDR=redis:6379` only.
