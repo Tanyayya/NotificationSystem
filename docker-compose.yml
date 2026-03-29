@@ -1,0 +1,40 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - REDIS_ADDR=redis:6379
+      - TASK_ID=local
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # Person A adds their ingestion service here
+  # ingestion:
+  #   build:
+  #     context: .
+  #     dockerfile: ingestion/Dockerfile
+  #   ports:
+  #     - "3000:3000"
+
+  # Person B adds their fanout worker here
+  # fanout:
+  #   build:
+  #     context: .
+  #     dockerfile: fanout/Dockerfile
+  #   environment:
+  #     - REDIS_ADDR=redis:6379
+  #     - KAFKA_ADDR=kafka:9092
