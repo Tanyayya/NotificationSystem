@@ -23,6 +23,10 @@ This brings up Redis, Kafka, and the fan-out workers (first Kafka boot can take 
 | **Redis** | Pub/Sub for cross-instance delivery; sorted sets for paginated history (`ZADD` / `ZREVRANGE`); atomic counters for unread badges (`INCR` / `DECR`). |
 | **WebSocket Gateway** (Go) | One goroutine per connection on ECS; user→gateway mapping in Redis; offline users get backlog replay from **PostgreSQL** on reconnect. |
 
+## Contracts
+
+Topic names, Kafka message shapes, consumer configuration, and Redis channels for the fan-out path are specified in **[CONTRACTS.md](CONTRACTS.md)**.
+
 ## Experiments
 
 1. **Fan-out on write vs. read** — Benchmark latency and publisher throughput at 10 / 100 / 1K / 10K subscribers; find the crossover vs. Amdahl-style sequential fan-out limits.
