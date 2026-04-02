@@ -120,7 +120,8 @@ resource "aws_ecs_task_definition" "ingestion" {
 
       environment = [
         # Kafka bootstrap brokers injected at deploy time from MSK output
-        { name = "KAFKA_BROKERS", value = aws_msk_cluster.main.bootstrap_brokers },
+        # Update KAFKA_BROKERS with the Kafka task IP after first deploy
+        { name = "KAFKA_BROKERS", value = "${var.kafka_broker_ip}:9092" },
         { name = "KAFKA_TOPIC", value = "notification-events" }
       ]
 
@@ -142,6 +143,7 @@ resource "aws_ecs_task_definition" "ingestion" {
   }
 }
 
+/* STEP 2 — uncomment after getting Kafka task IP
 resource "aws_ecs_service" "ingestion" {
   name            = "${var.project_name}-ingestion"
   cluster         = aws_ecs_cluster.main.id
@@ -159,6 +161,7 @@ resource "aws_ecs_service" "ingestion" {
     Project = var.project_name
   }
 }
+*/
 
 # ─────────────────────────────────────────────
 # FAN-OUT WORKER SERVICE
@@ -179,7 +182,7 @@ resource "aws_ecs_task_definition" "fanout" {
       image = var.fanout_image != "" ? var.fanout_image : "${aws_ecr_repository.fanout.repository_url}:latest"
 
       environment = [
-        { name = "KAFKA_BROKERS", value = aws_msk_cluster.main.bootstrap_brokers },
+        { name = "KAFKA_BROKERS", value = "${var.kafka_broker_ip}:9092" },
         { name = "KAFKA_TOPIC", value = "notification-events" },
         { name = "KAFKA_GROUP_ID", value = "fanout-consumer-group" },
         { name = "REDIS_ADDR", value = "${aws_elasticache_cluster.redis.cache_nodes[0].address}:6379" }
@@ -203,6 +206,7 @@ resource "aws_ecs_task_definition" "fanout" {
   }
 }
 
+/* STEP 2 — uncomment after getting Kafka task IP
 resource "aws_ecs_service" "fanout" {
   name            = "${var.project_name}-fanout"
   cluster         = aws_ecs_cluster.main.id
@@ -220,3 +224,4 @@ resource "aws_ecs_service" "fanout" {
     Project = var.project_name
   }
 }
+*/

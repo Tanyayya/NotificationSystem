@@ -93,7 +93,7 @@ resource "aws_security_group" "ingestion" {
 # Fan-out Worker Security Group — no inbound needed, only outbound to Kafka and Redis
 resource "aws_security_group" "fanout" {
   name        = "${var.project_name}-fanout-sg"
-  description = "Fan-out worker — outbound only to Kafka and Redis"
+  description = "Fan-out worker - outbound only to Kafka and Redis"
   vpc_id      = aws_vpc.main.id
 
   egress {
@@ -142,42 +142,6 @@ resource "aws_security_group" "redis" {
 
   tags = {
     Name    = "${var.project_name}-redis-sg"
-    Project = var.project_name
-  }
-}
-
-# MSK (Kafka) Security Group — accepts traffic from ingestion and fan-out worker only
-resource "aws_security_group" "msk" {
-  name        = "${var.project_name}-msk-sg"
-  description = "Allow inbound Kafka traffic from ingestion and fanout only"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    description     = "Kafka from ingestion API"
-    from_port       = 9092
-    to_port         = 9092
-    protocol        = "tcp"
-    security_groups = [aws_security_group.ingestion.id]
-  }
-
-  ingress {
-    description     = "Kafka from fanout worker"
-    from_port       = 9092
-    to_port         = 9092
-    protocol        = "tcp"
-    security_groups = [aws_security_group.fanout.id]
-  }
-
-  egress {
-    description = "Allow all outbound"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name    = "${var.project_name}-msk-sg"
     Project = var.project_name
   }
 }

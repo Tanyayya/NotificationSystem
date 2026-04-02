@@ -5,7 +5,7 @@ variable "aws_region" {
 }
 
 variable "project_name" {
-  description = "Prefix for all resource names"
+  description = "Prefix for all resource names — change this to avoid conflicts if multiple teammates deploy simultaneously"
   type        = string
   default     = "notif-system"
 }
@@ -50,6 +50,12 @@ variable "ecs_task_memory" {
   description = "Memory in MB for each ECS task"
   type        = number
   default     = 512
+}
+
+variable "kafka_broker_ip" {
+  description = "Kafka ECS task IP — get this from ECS console after first deploy and re-run terraform apply"
+  type        = string
+  default     = "10.0.2.8"
 }
 
 variable "kafka_instance_type" {
