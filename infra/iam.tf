@@ -1,17 +1,53 @@
-# Learner Lab provides a pre-created LabRole that has the permissions
-# needed for ECS to pull from ECR and write to CloudWatch.
-# We reference it by ARN rather than creating a new role —
-# Learner Lab does not allow creating custom IAM roles.
+# ECS Task Execution Role — allows ECS to pull images from ECR and write logs to CloudWatch
+resource "aws_iam_role" "ecs_execution_role" {
+  name = "${var.project_name}-ecs-execution-role"
 
-data "aws_iam_role" "lab_role" {
-  name = "LabRole"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "ecs-tasks.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = {
+    Project = var.project_name
+  }
+}
+
+# Attach AWS managed policy for ECS task execution
+resource "aws_iam_role_policy_attachment" "ecs_execution_role_policy" {
+  role       = aws_iam_role.ecs_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+# ECS Task Role — runtime permissions for the containers themselves
+resource "aws_iam_role" "ecs_task_role" {
+  name = "${var.project_name}-ecs-task-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "ecs-tasks.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = {
+    Project = var.project_name
+  }
 }
 
 # CloudWatch Log Groups — one per service
-# ECS tasks write stdout/stderr here, visible in the AWS Console
 resource "aws_cloudwatch_log_group" "gateway" {
   name              = "/ecs/${var.project_name}/gateway"
-  retention_in_days = 7 # keep logs for 7 days to avoid storage costs
+  retention_in_days = 7
 
   tags = {
     Project = var.project_name

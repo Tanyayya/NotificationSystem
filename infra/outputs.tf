@@ -16,8 +16,8 @@ output "redis_endpoint" {
 }
 
 output "kafka_bootstrap_brokers" {
-  description = "Kafka broker address — get the Kafka task IP from ECS console and use IP:9092"
-  value       = "Get Kafka task private IP from ECS console after deploy — use IP:9092"
+  description = "MSK Kafka bootstrap brokers — used internally by ingestion and fanout"
+  value       = aws_msk_cluster.main.bootstrap_brokers
 }
 
 output "ecr_gateway_url" {

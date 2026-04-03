@@ -24,8 +24,8 @@ resource "aws_ecs_task_definition" "gateway" {
   network_mode             = "awsvpc" # required for Fargate
   cpu                      = var.ecs_task_cpu
   memory                   = var.ecs_task_memory
-  execution_role_arn       = data.aws_iam_role.lab_role.arn # pulls images from ECR
-  task_role_arn            = data.aws_iam_role.lab_role.arn # runtime permissions
+  execution_role_arn       = aws_iam_role.ecs_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
 
   container_definitions = jsonencode([
     {
@@ -103,8 +103,8 @@ resource "aws_ecs_task_definition" "ingestion" {
   network_mode             = "awsvpc"
   cpu                      = var.ecs_task_cpu
   memory                   = var.ecs_task_memory
-  execution_role_arn       = data.aws_iam_role.lab_role.arn
-  task_role_arn            = data.aws_iam_role.lab_role.arn
+  execution_role_arn       = aws_iam_role.ecs_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
 
   container_definitions = jsonencode([
     {
@@ -120,8 +120,7 @@ resource "aws_ecs_task_definition" "ingestion" {
 
       environment = [
         # Kafka bootstrap brokers injected at deploy time from MSK output
-        # Update KAFKA_BROKERS with the Kafka task IP after first deploy
-        { name = "KAFKA_BROKERS", value = "${var.kafka_broker_ip}:9092" },
+        { name = "KAFKA_BROKERS", value = aws_msk_cluster.main.bootstrap_brokers },
         { name = "KAFKA_TOPIC", value = "notification-events" }
       ]
 
@@ -173,8 +172,8 @@ resource "aws_ecs_task_definition" "fanout" {
   network_mode             = "awsvpc"
   cpu                      = var.ecs_task_cpu
   memory                   = var.ecs_task_memory
-  execution_role_arn       = data.aws_iam_role.lab_role.arn
-  task_role_arn            = data.aws_iam_role.lab_role.arn
+  execution_role_arn       = aws_iam_role.ecs_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
 
   container_definitions = jsonencode([
     {
@@ -182,7 +181,7 @@ resource "aws_ecs_task_definition" "fanout" {
       image = var.fanout_image != "" ? var.fanout_image : "${aws_ecr_repository.fanout.repository_url}:latest"
 
       environment = [
-        { name = "KAFKA_BROKERS", value = "${var.kafka_broker_ip}:9092" },
+        { name = "KAFKA_BROKERS", value = aws_msk_cluster.main.bootstrap_brokers },
         { name = "KAFKA_TOPIC", value = "notification-events" },
         { name = "KAFKA_GROUP_ID", value = "fanout-consumer-group" },
         { name = "REDIS_ADDR", value = "${aws_elasticache_cluster.redis.cache_nodes[0].address}:6379" }
@@ -206,22 +205,3 @@ resource "aws_ecs_task_definition" "fanout" {
   }
 }
 
-/* STEP 2 — uncomment after getting Kafka task IP
-resource "aws_ecs_service" "fanout" {
-  name            = "${var.project_name}-fanout"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.fanout.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
-
-  network_configuration {
-    subnets          = [aws_subnet.public_1.id, aws_subnet.public_2.id]
-    security_groups  = [aws_security_group.fanout.id]
-    assign_public_ip = true
-  }
-
-  tags = {
-    Project = var.project_name
-  }
-}
-*/

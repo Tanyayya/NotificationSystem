@@ -103,9 +103,40 @@ resource "aws_security_group" "fanout" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+}
+
+# MSK Security Group — accepts Kafka traffic from ingestion and fanout only
+resource "aws_security_group" "msk" {
+  name        = "${var.project_name}-msk-sg"
+  description = "Allow inbound Kafka traffic from ingestion and fanout only"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description     = "Kafka from ingestion API"
+    from_port       = 9092
+    to_port         = 9092
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ingestion.id]
+  }
+
+  ingress {
+    description     = "Kafka from fanout worker"
+    from_port       = 9092
+    to_port         = 9092
+    protocol        = "tcp"
+    security_groups = [aws_security_group.fanout.id]
+  }
+
+  egress {
+    description = "Allow all outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
   tags = {
-    Name    = "${var.project_name}-fanout-sg"
+    Name    = "${var.project_name}-msk-sg"
     Project = var.project_name
   }
 }

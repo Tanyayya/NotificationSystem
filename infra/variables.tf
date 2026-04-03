@@ -52,12 +52,6 @@ variable "ecs_task_memory" {
   default     = 512
 }
 
-variable "kafka_broker_ip" {
-  description = "Kafka ECS task IP — get this from ECS console after first deploy and re-run terraform apply"
-  type        = string
-  default     = "10.0.2.8"
-}
-
 variable "kafka_instance_type" {
   description = "MSK broker instance type — t3.small is the minimum for Learner Lab"
   type        = string
