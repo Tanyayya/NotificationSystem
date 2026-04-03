@@ -29,14 +29,6 @@ This folder contains Terraform code to deploy the full notification system stack
 
 ---
 
-## Account Notes
-
-**Sandbox account:** Full access including MSK and IAM role creation. Use this for development and experiments.
-
-**Learner Lab account:** MSK and IAM role creation are blocked. Use Docker Compose locally instead and only deploy to Learner Lab for basic ECS testing without Kafka.
-
----
-
 ## Deploy Steps
 
 ### 1. Configure AWS credentials
