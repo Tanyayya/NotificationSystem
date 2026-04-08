@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"slices"
 	"time"
 )
+
+var allowedEventTypes = []string{"POST", "LIKE", "COMMENT"}
 
 // EventRequest is the body the client sends to POST /event.
 type EventRequest struct {
@@ -41,6 +44,10 @@ func (h *Handler) HandleEvent(w http.ResponseWriter, r *http.Request) {
 
 	if req.Type == "" || req.FromUser == "" {
 		http.Error(w, "type and from_user are required", http.StatusBadRequest)
+		return
+	}
+	if !slices.Contains(allowedEventTypes, req.Type) {
+		http.Error(w, "type must be one of POST, LIKE, COMMENT", http.StatusBadRequest)
 		return
 	}
 

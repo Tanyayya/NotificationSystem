@@ -8,11 +8,11 @@ JSON body (`EventRequest`):
 
 | Field | JSON key | Required | Notes |
 |-------|----------|----------|--------|
-| Type | `type` | yes | Notification kind. |
+| Type | `type` | yes | Exactly one of **`POST`**, **`LIKE`**, **`COMMENT`** (case-sensitive). |
 | From user | `from_user` | yes | Kafka message key (recipient id for fan-out). |
 | Detail | `detail` | no | Optional body text; omitted or empty becomes `""` in Kafka. |
 
-Responses: **200** empty body on success; **400** invalid JSON or missing `type` / `from_user`; **405** wrong method; **500** publish failure.
+Responses: **200** empty body on success; **400** invalid JSON, missing `type` / `from_user`, or invalid `type`; **405** wrong method; **500** publish failure.
 
 Default port **3000** unless `PORT` is set. Docker Compose maps `3000:3000`.
 
@@ -23,7 +23,7 @@ Local run (default port):
 ```bash
 curl -sS -X POST http://localhost:3000/event \
   -H 'Content-Type: application/json' \
-  -d '{"type":"assignment.created","from_user":"user-123","detail":"You have a new task."}'
+  -d '{"type":"POST","from_user":"user-123","detail":"You have a new task."}'
 ```
 
 Minimal body (no `detail`):
@@ -31,7 +31,7 @@ Minimal body (no `detail`):
 ```bash
 curl -sS -X POST http://localhost:3000/event \
   -H 'Content-Type: application/json' \
-  -d '{"type":"mention","from_user":"user-456"}'
+  -d '{"type":"COMMENT","from_user":"user-456"}'
 ```
 
 Docker Compose service name (from another container on the same network):
@@ -39,7 +39,7 @@ Docker Compose service name (from another container on the same network):
 ```bash
 curl -sS -X POST http://ingestion:3000/event \
   -H 'Content-Type: application/json' \
-  -d '{"type":"new_post","from_user":"alice","detail":"Check out this update"}'
+  -d '{"type":"LIKE","from_user":"alice","detail":"Check out this update"}'
 ```
 
 ## `GET /health`

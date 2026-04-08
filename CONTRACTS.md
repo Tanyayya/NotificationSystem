@@ -30,7 +30,7 @@ Each record **value** must be JSON with the following fields. The **ingestion** 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `id` | `string` or `number` | Yes | Notification id. **Ingestion:** string `"<unix_ms>-<seq>"` (e.g. `"1743273600000-1"`) from `ingestion/snowflake.go`. **Consumer:** also accepts a JSON number or a base-10 int64 string; hyphenated ids are mapped to `int64` for Redis (see `fanout/internal/consumer` `parseSnowflakeID`). |
-| `type` | `string` | Yes | Notification kind (e.g. `Like`, `Comment`, `Post`, `new_post`). |
+| `type` | `string` | Yes | Notification kind. **Allowed values:** `POST`, `LIKE`, `COMMENT` only (case-sensitive). Ingestion rejects any other value. |
 | `detail` | `string` | Yes | Free-text context for the recipient; forwarded to Redis as `message` (see below). May be empty when the producer omits it (ingestion sends `""` if the HTTP body has no `detail`). |
 | `timestamp` | `number` | Yes | Unix time in **milliseconds** since epoch. **Ingestion** sets this to `time.Now().UnixMilli()` at publish time. |
 
@@ -39,7 +39,7 @@ Example (**ingestion** shape: string `id`, milliseconds from the server clock):
 ```json
 {
   "id": "1743273600000-1",
-  "type": "Post",
+  "type": "POST",
   "detail": "Alice posted a photo",
   "timestamp": 1743273600123
 }
@@ -50,7 +50,7 @@ Example (numeric `id`, for other producers):
 ```json
 {
   "id": 1234567890123456789,
-  "type": "Post",
+  "type": "POST",
   "detail": "Alice posted a photo",
   "timestamp": 1743273600000
 }
@@ -61,7 +61,7 @@ Example (decimal string `id`, accepted by the parser):
 ```json
 {
   "id": "1234567890123456789",
-  "type": "Comment",
+  "type": "COMMENT",
   "detail": "Nice shot!",
   "timestamp": 1743273600000
 }
@@ -75,7 +75,7 @@ The ingestion API accepts **`POST /event`** with JSON matching `ingestion/handle
 
 | Field | JSON | Required | Description |
 |-------|------|----------|-------------|
-| `Type` | `type` | Yes | Maps to Kafka `type`. |
+| `Type` | `type` | Yes | Must be `POST`, `LIKE`, or `COMMENT`. Maps to Kafka `type`. |
 | `FromUser` | `from_user` | Yes | Kafka **message key** (recipient user id for Redis routing). |
 | `Details` | `detail` | No | Maps to Kafka `detail`; omitted or empty becomes `""`. |
 
@@ -90,7 +90,7 @@ The `kafka-producer` service accepts `POST /messages` with a body that maps to t
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `id` | `number` | No | Defaults to `time.Now().UnixNano()` if zero. |
-| `type` | `string` | Yes | Maps to `type`. |
+| `type` | `string` | Yes | Must be `POST`, `LIKE`, or `COMMENT`. Maps to `type`. |
 | `detail` | `string` | Yes | Maps to `detail`. |
 | `timestamp` | `number` | No | Defaults to `time.Now().UnixMilli()` if zero. |
 | `key` | `string` | No | If set, becomes the Kafka **message key** (recipient user id). |
@@ -124,7 +124,7 @@ Example:
 ```json
 {
   "id": 1234567890123456789,
-  "type": "new_post",
+  "type": "POST",
   "from_user": "alice",
   "message": "Alice posted a photo",
   "timestamp": 1743273600000
