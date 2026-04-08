@@ -68,7 +68,7 @@ type Notifier interface {
 }
 
 // Run reads messages from the given topic until the context is cancelled.
-// defaultUserID is used when the Kafka message has no key. On Redis publish failure, the error is logged and the message is still committed.
+// defaultUserID is reserved for future recipient resolution; publishing uses placeholder recipient ids. On Redis publish failure per recipient, the error is logged and the message is still committed.
 func Run(ctx context.Context, brokers []string, topic, groupID string, defaultUserID string, n Notifier) error {
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:  brokers,
@@ -121,13 +121,14 @@ func Run(ctx context.Context, brokers []string, topic, groupID string, defaultUs
 					"kafka message partition=%d offset=%d key=%q id=%d type=%q detail=%q ts_ms=%d",
 					m.Partition, m.Offset, string(m.Key), ev.ID, ev.Type, ev.Detail, ev.Timestamp,
 				)
-				// Prefer the message key as user id; fall back when producers omit the key.
-				userID := defaultUserID
-				if len(m.Key) > 0 {
-					userID = string(m.Key)
-				}
-				if err := n.Publish(ctx, userID, ev); err != nil {
-					log.Printf("redis publish userID=%q: %v", userID, err)
+				
+				// Placeholder fan-out: publish the event to each recipient channel.
+				// TODO: Implement actual FOLLOWER LOGIC HERE
+				fillerRecipients := []string{"Alice", "Bob", "Example Follower"}
+				for _, recipientID := range fillerRecipients {
+					if err := n.Publish(ctx, recipientID, ev); err != nil {
+						log.Printf("redis publish userID=%q: %v", recipientID, err)
+					}
 				}
 			}
 		}
