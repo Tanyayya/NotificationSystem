@@ -1,34 +1,4 @@
 services:
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.6.0
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "2181"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  kafka:
-    image: confluentinc/cp-kafka:7.6.0
-    depends_on:
-      zookeeper:
-        condition: service_healthy
-    ports:
-      - "9092:9092"
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-    healthcheck:
-      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
-      interval: 10s
-      timeout: 10s
-      retries: 10
-
   redis:
     image: redis:7-alpine
     ports:
@@ -47,12 +17,12 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - KAFKA_BROKER=kafka:9092
+      - KAFKA_BROKERS=kafka:29092
+      - KAFKA_TOPIC=worker-events
     depends_on:
       kafka:
         condition: service_healthy
 
-  gateway:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.1
     environment:
