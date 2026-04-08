@@ -44,6 +44,8 @@ func subscribeNotifications(ctx context.Context, userID string, writeCh chan<- [
 				return
 			}
 
+			log.Printf("redis pub/sub received user=%s channel=%q payload=%s", userID, msg.Channel, msg.Payload)
+
 			// Forward the message payload to the writer goroutine via writeCh.
 			// Using a non-blocking select so a slow/stuck client doesn't block
 			// the subscriber — we just drop the message and log it instead.
