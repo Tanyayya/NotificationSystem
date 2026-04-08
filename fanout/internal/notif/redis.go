@@ -42,12 +42,15 @@ func (p *Publisher) Close() error {
 }
 
 // Publish sends a notification derived from the Kafka event to channel notif:{userID}.
-// FromUser comes from worker config; id, type, message (detail), and timestamp come from the event.
 func (p *Publisher) Publish(ctx context.Context, userID string, ev consumer.NotificationEvent) error {
+	fromUser := ev.FromUser
+	if fromUser == "" {
+		fromUser = p.payload.FromUser
+	}
 	body, err := json.Marshal(Payload{
 		ID:        ev.ID,
 		Type:      ev.Type,
-		FromUser:  p.payload.FromUser,
+		FromUser:  fromUser,
 		Message:   ev.Detail,
 		Timestamp: ev.Timestamp,
 	})

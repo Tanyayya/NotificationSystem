@@ -76,7 +76,7 @@ The ingestion API accepts **`POST /event`** with JSON matching `ingestion/handle
 | Field | JSON | Required | Description |
 |-------|------|----------|-------------|
 | `Type` | `type` | Yes | Must be `POST`, `LIKE`, or `COMMENT`. Maps to Kafka `type`. |
-| `FromUser` | `from_user` | Yes | Kafka **message key** (recipient user id for Redis routing). |
+| `FromUser` | `from_user` | Yes | Kafka **message key** (sender / actor who triggered the event; becomes Redis JSON `from_user` when non-empty). |
 | `Details` | `detail` | No | Maps to Kafka `detail`; omitted or empty becomes `""`. |
 
 Kafka fields **`id`** and **`timestamp`** are assigned by the service (`NewSnowflakeID()` and current time in ms); clients do not send them on this endpoint.
@@ -103,7 +103,7 @@ The `kafka-producer` service accepts `POST /messages` with a body that maps to t
 
 | Pattern | Example | Purpose |
 |---------|---------|---------|
-| `notif:{userID}` | `notif:user-42` | One channel per recipient; `userID` is the same string used as the Kafka message key (or the default user id when the key is empty). |
+| `notif:{userID}` | `notif:user-42` | One Pub/Sub channel per **recipient**. Gateway clients pass the same string as the WebSocket query `user_id` (`gateway/handler.go`, `gateway/pubsub.go`). |
 
 Subscribers in production typically `SUBSCRIBE` to a single user channel. The test harness `redis-subscriber` uses **`PSUBSCRIBE notif:*`** to observe all notification channels.
 
@@ -115,7 +115,7 @@ Published as the **string body** of `PUBLISH`. Shape:
 |-------|------|-------------|
 | `id` | `number` | From Kafka event `id`. |
 | `type` | `string` | From Kafka event `type`. |
-| `from_user` | `string` | From worker config `NOTIFY_FROM_USER` (not from Kafka). |
+| `from_user` | `string` | Kafka **message key** when non-empty (`NotificationEvent.FromUser`). |
 | `message` | `string` | From Kafka event `detail`. |
 | `timestamp` | `number` | From Kafka event `timestamp` (Unix **milliseconds**). |
 
@@ -135,13 +135,13 @@ Example:
 
 ## Field mapping (Kafka → Redis)
 
-| Kafka value | Redis payload |
-|-------------|----------------|
-| `id` | `id` |
-| `type` | `type` |
-| `detail` | `message` |
-| `timestamp` | `timestamp` |
-| — | `from_user` (worker env `NOTIFY_FROM_USER`) |
+| Kafka | Redis payload |
+|-------|----------------|
+| Value `id` (parsed per `parseSnowflakeID`) | `id` |
+| Value `type` | `type` |
+| Value `detail` | `message` |
+| Value `timestamp` | `timestamp` |
+| Record **key** (bytes as UTF-8), or `NOTIFY_FROM_USER` if key empty | `from_user` |
 
 ---
 

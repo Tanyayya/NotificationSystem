@@ -15,7 +15,7 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-// NotificationEvent is the JSON body expected on each Kafka message value.
+// NotificationEvent combines the Kafka message key (FromUser) with the JSON value body.
 // ID is the notification snowflake; Type names the notification kind (e.g. Like, Comment, Post);
 // Detail carries any extra context for the recipient.
 // Timestamp is Unix milliseconds since the epoch (JSON field "timestamp").
@@ -24,6 +24,7 @@ type NotificationEvent struct {
 	Type      string
 	Detail    string
 	Timestamp int64
+	FromUser  string
 }
 
 // parseSnowflakeID decodes JSON id as a number, a base-10 int string, or the
@@ -116,12 +117,13 @@ func Run(ctx context.Context, brokers []string, topic, groupID string, defaultUs
 					Type:      raw.Type,
 					Detail:    raw.Detail,
 					Timestamp: raw.Timestamp,
+					FromUser:  string(m.Key),
 				}
 				log.Printf(
 					"kafka message partition=%d offset=%d key=%q id=%d type=%q detail=%q ts_ms=%d",
 					m.Partition, m.Offset, string(m.Key), ev.ID, ev.Type, ev.Detail, ev.Timestamp,
 				)
-				
+
 				// Placeholder fan-out: publish the event to each recipient channel.
 				// TODO: Implement actual FOLLOWER LOGIC HERE
 				fillerRecipients := []string{"Alice", "Bob", "Example Follower"}
