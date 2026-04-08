@@ -24,10 +24,13 @@ func NewProducer(brokers []string, topic string) (*Producer, error) {
 	return &Producer{sp: sp, topic: topic}, nil
 }
 
-func (p *Producer) Publish(payload []byte) error {
+func (p *Producer) Publish(key string, payload []byte) error {
 	msg := &sarama.ProducerMessage{
 		Topic: p.topic,
 		Value: sarama.ByteEncoder(payload),
+	}
+	if key != "" {
+		msg.Key = sarama.StringEncoder(key)
 	}
 	_, _, err := p.sp.SendMessage(msg)
 	return err

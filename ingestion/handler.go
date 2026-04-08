@@ -4,23 +4,23 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 )
 
 // EventRequest is the body the client sends to POST /event.
-// Matches Contract 1 (minus the id, which we assign here).
 type EventRequest struct {
-	Type      string   `json:"type"`
-	FromUser  string   `json:"from_user"`
-	Recipients []string `json:"recipients"`
+	Type     string `json:"type"`
+	FromUser string `json:"from_user"`
+	Details  string `json:"detail"`
 }
 
 // KafkaEvent is the full payload published to Kafka.
-// Person B's fan-out worker consumes this.
+// Shape matches fanout/internal/consumer.NotificationEvent JSON fields.
 type KafkaEvent struct {
-	ID         string   `json:"id"`
-	Type       string   `json:"type"`
-	FromUser   string   `json:"from_user"`
-	Recipients []string `json:"recipients"`
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Detail    string `json:"detail"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 type Handler struct {
@@ -39,16 +39,16 @@ func (h *Handler) HandleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Type == "" || req.FromUser == "" || len(req.Recipients) == 0 {
-		http.Error(w, "type, from_user, and recipients are required", http.StatusBadRequest)
+	if req.Type == "" || req.FromUser == "" {
+		http.Error(w, "type and from_user are required", http.StatusBadRequest)
 		return
 	}
 
 	event := KafkaEvent{
-		ID:         NewSnowflakeID(),
-		Type:       req.Type,
-		FromUser:   req.FromUser,
-		Recipients: req.Recipients,
+		ID:        NewSnowflakeID(),
+		Type:      req.Type,
+		Detail:    req.Details,
+		Timestamp: time.Now().UnixMilli(),
 	}
 
 	payload, err := json.Marshal(event)
@@ -58,14 +58,14 @@ func (h *Handler) HandleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.producer.Publish(payload); err != nil {
+	if err := h.producer.Publish(req.FromUser, payload); err != nil {
 		log.Printf("kafka publish error: %v", err)
 		http.Error(w, "failed to publish event", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("published event id=%s type=%s from=%s recipients=%v",
-		event.ID, event.Type, event.FromUser, event.Recipients)
+	log.Printf("published event id=%s type=%s key=%s detail=%q ts_ms=%d",
+		event.ID, event.Type, req.FromUser, event.Detail, event.Timestamp)
 
 	w.WriteHeader(http.StatusOK)
 }

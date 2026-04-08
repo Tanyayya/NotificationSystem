@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"hash/fnv"
 	"io"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -24,6 +26,9 @@ type NotificationEvent struct {
 	Timestamp int64
 }
 
+// parseSnowflakeID decodes JSON id as a number, a base-10 int string, or the
+// ingestion format "<unix_ms>-<seq>" from NewSnowflakeID in ingestion/snowflake.go.
+// Hyphenated ids are mapped to int64 via FNV-1a (same string always yields the same id).
 func parseSnowflakeID(raw json.RawMessage) (int64, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
@@ -34,6 +39,14 @@ func parseSnowflakeID(raw json.RawMessage) (int64, error) {
 		if err := json.Unmarshal(raw, &s); err != nil {
 			return 0, err
 		}
+		s = strings.TrimSpace(s)
+		if msStr, seqStr, ok := strings.Cut(s, "-"); ok && msStr != "" && seqStr != "" {
+			if _, errMS := strconv.ParseUint(msStr, 10, 64); errMS == nil {
+				if _, errSeq := strconv.ParseUint(seqStr, 10, 64); errSeq == nil {
+					return hyphenSnowflakeToInt64(s), nil
+				}
+			}
+		}
 		return strconv.ParseInt(s, 10, 64)
 	}
 	var n int64
@@ -41,6 +54,12 @@ func parseSnowflakeID(raw json.RawMessage) (int64, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+func hyphenSnowflakeToInt64(s string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(s))
+	return int64(h.Sum64() & 0x7FFFFFFFFFFFFFFF)
 }
 
 // Notifier publishes to Redis after a Kafka message is processed.
