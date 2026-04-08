@@ -30,11 +30,39 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
     ports:
       - "2181:2181"
+    healthcheck:
+      test: ["CMD", "cub", "zk-ready", "localhost:2181", "5"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  # Removes stale /brokers/ids/1 in ZooKeeper when Kafka is recreated before the old
+  # ZK session expires (otherwise Kafka fatals with NodeExists / owner session mismatch).
+  kafka-zk-prune:
+    image: confluentinc/cp-kafka:7.6.1
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        cub zk-ready zookeeper:2181 60
+        set +e
+        zookeeper-shell zookeeper:2181 <<'ZK'
+        deleteall /brokers/ids/1
+        quit
+        ZK
+        exit 0
 
   kafka:
     image: confluentinc/cp-kafka:7.6.1
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
+      kafka-zk-prune:
+        condition: service_completed_successfully
     ports:
       - "9092:9092"
     environment:
