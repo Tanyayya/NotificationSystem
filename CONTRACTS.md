@@ -25,16 +25,27 @@ This document is the agreed contract for **topic names**, **message shapes**, an
 
 ### Message value (JSON)
 
-Each record **value** must be JSON with the following fields. The consumer unmarshals flexibly: `id` may be a JSON number **or** a decimal string in quotes.
+Each record **value** must be JSON with the following fields. The **ingestion** service (see below) is the reference producer: it always emits `id` as a **quoted string** and sets the Kafka **key** from the HTTP `from_user` field.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | `number` or `string` | Yes | Notification id (snowflake-style); string form must be parseable as base-10 int64. |
+| `id` | `string` or `number` | Yes | Notification id. **Ingestion:** string `"<unix_ms>-<seq>"` (e.g. `"1743273600000-1"`) from `ingestion/snowflake.go`. **Consumer:** also accepts a JSON number or a base-10 int64 string; hyphenated ids are mapped to `int64` for Redis (see `fanout/internal/consumer` `parseSnowflakeID`). |
 | `type` | `string` | Yes | Notification kind (e.g. `Like`, `Comment`, `Post`, `new_post`). |
-| `detail` | `string` | Yes | Free-text context for the recipient; forwarded to Redis as `message` (see below). |
-| `timestamp` | `number` | Yes | Unix time in **milliseconds** since epoch. |
+| `detail` | `string` | Yes | Free-text context for the recipient; forwarded to Redis as `message` (see below). May be empty when the producer omits it (ingestion sends `""` if the HTTP body has no `detail`). |
+| `timestamp` | `number` | Yes | Unix time in **milliseconds** since epoch. **Ingestion** sets this to `time.Now().UnixMilli()` at publish time. |
 
-Example (numeric `id`):
+Example (**ingestion** shape: string `id`, milliseconds from the server clock):
+
+```json
+{
+  "id": "1743273600000-1",
+  "type": "Post",
+  "detail": "Alice posted a photo",
+  "timestamp": 1743273600123
+}
+```
+
+Example (numeric `id`, for other producers):
 
 ```json
 {
@@ -45,7 +56,7 @@ Example (numeric `id`):
 }
 ```
 
-Example (string `id`, accepted by the parser):
+Example (decimal string `id`, accepted by the parser):
 
 ```json
 {
@@ -58,9 +69,23 @@ Example (string `id`, accepted by the parser):
 
 Malformed JSON or an invalid `id` is logged; the message is still **committed** (no infinite retry on bad payload).
 
+### HTTP ingestion (`ingestion` service)
+
+The ingestion API accepts **`POST /event`** with JSON matching `ingestion/handler.go` `EventRequest`. It builds `KafkaEvent`, publishes to `KAFKA_TOPIC` (default `worker-events`), and uses the Kafka **message key** = `from_user`.
+
+| Field | JSON | Required | Description |
+|-------|------|----------|-------------|
+| `Type` | `type` | Yes | Maps to Kafka `type`. |
+| `FromUser` | `from_user` | Yes | Kafka **message key** (recipient user id for Redis routing). |
+| `Details` | `detail` | No | Maps to Kafka `detail`; omitted or empty becomes `""`. |
+
+Kafka fields **`id`** and **`timestamp`** are assigned by the service (`NewSnowflakeID()` and current time in ms); clients do not send them on this endpoint.
+
+Listen port defaults to **`3000`** (`PORT`). **`GET /health`** returns 200 for readiness checks.
+
 ### HTTP producer (test harness)
 
-The `kafka-producer` service accepts `POST /messages` with a body that maps to the same value shape, plus optional routing:
+The `kafka-producer` service accepts `POST /messages` with a body that maps to the same Kafka **value** shape, plus optional routing:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
