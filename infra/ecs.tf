@@ -21,7 +21,7 @@ resource "aws_ecs_cluster" "main" {
 resource "aws_ecs_task_definition" "gateway" {
   family                   = "${var.project_name}-gateway"
   requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc" # required for Fargate
+  network_mode             = "awsvpc"
   cpu                      = var.ecs_task_cpu
   memory                   = var.ecs_task_memory
   execution_role_arn       = aws_iam_role.ecs_execution_role.arn
@@ -40,10 +40,7 @@ resource "aws_ecs_task_definition" "gateway" {
       ]
 
       environment = [
-        # Redis endpoint injected at deploy time from ElastiCache output
         { name = "REDIS_ADDR", value = "${aws_elasticache_cluster.redis.cache_nodes[0].address}:6379" },
-        # TASK_ID helps the gateway identify itself in Redis registration
-        # ECS_CONTAINER_METADATA_URI_V4 is auto-injected by Fargate
         { name = "TASK_ID", value = "ecs-gateway" }
       ]
 
@@ -69,23 +66,21 @@ resource "aws_ecs_service" "gateway" {
   name            = "${var.project_name}-gateway"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.gateway.arn
-  desired_count   = 1 # start with 1 task, scale up for experiments
+  desired_count   = 1
   launch_type     = "FARGATE"
 
   network_configuration {
     subnets          = [aws_subnet.public_1.id, aws_subnet.public_2.id]
     security_groups  = [aws_security_group.gateway.id]
-    assign_public_ip = true # required since we're using public subnets without NAT
+    assign_public_ip = true
   }
 
-  # Register gateway tasks with the ALB target group
   load_balancer {
     target_group_arn = aws_lb_target_group.gateway.arn
     container_name   = "gateway"
     container_port   = var.gateway_port
   }
 
-  # Wait for ALB to be ready before starting the service
   depends_on = [aws_lb_listener.gateway]
 
   tags = {
@@ -119,9 +114,8 @@ resource "aws_ecs_task_definition" "ingestion" {
       ]
 
       environment = [
-        # Kafka bootstrap brokers injected at deploy time from MSK output
         { name = "KAFKA_BROKERS", value = aws_msk_cluster.main.bootstrap_brokers },
-        { name = "KAFKA_TOPIC", value = "notification-events" }
+        { name = "KAFKA_TOPIC", value = "worker-events" }
       ]
 
       logConfiguration = {
@@ -142,7 +136,6 @@ resource "aws_ecs_task_definition" "ingestion" {
   }
 }
 
-/* STEP 2 — uncomment after getting Kafka task IP
 resource "aws_ecs_service" "ingestion" {
   name            = "${var.project_name}-ingestion"
   cluster         = aws_ecs_cluster.main.id
@@ -160,7 +153,6 @@ resource "aws_ecs_service" "ingestion" {
     Project = var.project_name
   }
 }
-*/
 
 # ─────────────────────────────────────────────
 # FAN-OUT WORKER SERVICE
@@ -182,8 +174,8 @@ resource "aws_ecs_task_definition" "fanout" {
 
       environment = [
         { name = "KAFKA_BROKERS", value = aws_msk_cluster.main.bootstrap_brokers },
-        { name = "KAFKA_TOPIC", value = "notification-events" },
-        { name = "KAFKA_GROUP_ID", value = "fanout-consumer-group" },
+        { name = "KAFKA_TOPIC", value = "worker-events" },
+        { name = "KAFKA_GROUP_ID", value = "worker-skeleton" },
         { name = "REDIS_ADDR", value = "${aws_elasticache_cluster.redis.cache_nodes[0].address}:6379" }
       ]
 
@@ -205,3 +197,20 @@ resource "aws_ecs_task_definition" "fanout" {
   }
 }
 
+resource "aws_ecs_service" "fanout" {
+  name            = "${var.project_name}-fanout"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.fanout.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = [aws_subnet.public_1.id, aws_subnet.public_2.id]
+    security_groups  = [aws_security_group.fanout.id]
+    assign_public_ip = true
+  }
+
+  tags = {
+    Project = var.project_name
+  }
+}

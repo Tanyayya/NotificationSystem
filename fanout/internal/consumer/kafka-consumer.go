@@ -124,13 +124,12 @@ func Run(ctx context.Context, brokers []string, topic, groupID string, defaultUs
 					m.Partition, m.Offset, string(m.Key), ev.ID, ev.Type, ev.Detail, ev.Timestamp,
 				)
 
-				// Placeholder fan-out: publish the event to each recipient channel.
-				// TODO: Implement actual FOLLOWER LOGIC HERE
-				fillerRecipients := []string{"Alice", "Bob", "Example Follower"}
-				for _, recipientID := range fillerRecipients {
-					if err := n.Publish(ctx, recipientID, ev); err != nil {
-						log.Printf("redis publish userID=%q: %v", recipientID, err)
-					}
+				userID := string(m.Key)
+				if userID == "" {
+					userID = defaultUserID
+				}
+				if err := n.Publish(ctx, userID, ev); err != nil {
+					log.Printf("redis publish userID=%q: %v", userID, err)
 				}
 			}
 		}
