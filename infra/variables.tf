@@ -63,3 +63,10 @@ variable "redis_node_type" {
   type        = string
   default     = "cache.t3.micro"
 }
+
+variable "db_password" {
+  description = "PostgreSQL master password — override this when deploying"
+  type        = string
+  default     = "notif_password_123"
+  sensitive   = true
+}
