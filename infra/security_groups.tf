@@ -90,10 +90,10 @@ resource "aws_security_group" "ingestion" {
   }
 }
 
-# Fan-out Worker Security Group — no inbound needed, only outbound to Kafka and Redis
+# Fan-out Worker Security Group — no inbound needed, only outbound to Kafka, Redis, and RDS
 resource "aws_security_group" "fanout" {
   name        = "${var.project_name}-fanout-sg"
-  description = "Fan-out worker - outbound only to Kafka and Redis"
+  description = "Fan-out worker - outbound only to Kafka, Redis, and RDS"
   vpc_id      = aws_vpc.main.id
 
   egress {
@@ -102,6 +102,46 @@ resource "aws_security_group" "fanout" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name    = "${var.project_name}-fanout-sg"
+    Project = var.project_name
+  }
+}
+
+# RDS Security Group — accepts PostgreSQL traffic from fanout worker and local machine
+resource "aws_security_group" "rds" {
+  name        = "${var.project_name}-rds-sg"
+  description = "Allow PostgreSQL traffic from fanout worker and local machine"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description     = "PostgreSQL from fanout worker"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.fanout.id]
+  }
+
+  ingress {
+    description = "PostgreSQL from anywhere - for running init.sql locally"
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name    = "${var.project_name}-rds-sg"
+    Project = var.project_name
   }
 }
 

@@ -18,6 +18,13 @@ type Config struct {
 	NotifyType          string
 	NotifyFromUser      string
 	NotifyMessage       string
+	// DB_DSN is the PostgreSQL connection string.
+	// Example: postgres://notif:notif@localhost:5432/notifications?sslmode=disable
+	DBDSN string
+	// FanoutThreshold is the follower count above which fan-out on read is used.
+	// Accounts with followers <= threshold use fan-out on write.
+	// Accounts with followers > threshold use fan-out on read (stub in Week 2).
+	FanoutThreshold int
 }
 
 // ProducerConfig holds producer-only settings.
@@ -42,6 +49,8 @@ func Load() Config {
 		NotifyType:          getEnv("NOTIFY_TYPE", "new_post"),
 		NotifyFromUser:      getEnv("NOTIFY_FROM_USER", "alice"),
 		NotifyMessage:       getEnv("NOTIFY_MESSAGE", "Alice posted a photo"),
+		DBDSN:               getEnv("DB_DSN", "postgres://notif:notif@localhost:5432/notifications?sslmode=disable"),
+		FanoutThreshold:     getEnvInt("FANOUT_THRESHOLD", 1000),
 	}
 }
 

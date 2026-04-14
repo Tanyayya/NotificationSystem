@@ -20,6 +20,11 @@ output "kafka_bootstrap_brokers" {
   value       = aws_msk_cluster.main.bootstrap_brokers
 }
 
+output "rds_endpoint" {
+  description = "RDS PostgreSQL endpoint — run init.sql against this after deploy"
+  value       = aws_db_instance.postgres.address
+}
+
 output "ecr_gateway_url" {
   description = "ECR URL for gateway image — use this to push your Docker image"
   value       = aws_ecr_repository.gateway.repository_url
