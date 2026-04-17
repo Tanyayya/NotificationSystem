@@ -146,8 +146,8 @@ terraform destroy   # MSK takes a few minutes to delete
 | Layer                        | Role                                                                                                                                                |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Event Ingestion API** (Go) | `POST /event`; Snowflake IDs for ordering; events published to **Kafka** partitioned by sender id for per-user ordering.                            |
-| **Fan-out Workers** (Go)     | Consume Kafka; **hybrid fan-out** — write path for typical users, read path for high-follower accounts; crossover threshold tuned empirically.      |
-| **Redis**                    | Pub/Sub for cross-instance delivery; sorted sets for paginated history (`ZADD` / `ZREVRANGE`); atomic counters for unread badges (`INCR` / `DECR`). |
+| **Fan-out Workers** (Go)     | Consume Kafka; fan-out strategy set by `NOTIFICATION_MODE` (`FAN_OUT_WRITE`, `FAN_OUT_READ`, or `FAN_OUT_HYBRID`). Hybrid mode switches between write and read paths based on `FANOUT_THRESHOLD`. |
+| **Redis**                    | Pub/Sub for cross-instance delivery (`notif:{userID}`); session keys for user→gateway mapping (`ws:user:{userID}`). |
 | **WebSocket Gateway** (Go)   | One goroutine per connection on ECS; user→gateway mapping in Redis; offline users get backlog replay from **PostgreSQL** on reconnect.              |
 
 ---

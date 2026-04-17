@@ -20,8 +20,8 @@ This document is the agreed contract for **topic names**, **message shapes**, an
 
 ### Message key
 
-- **Preferred:** non-empty UTF-8 string identifying the **recipient user** (the worker routes Redis publishes using this value).
-- **If omitted:** the worker uses `NOTIFY_DEFAULT_USER_ID` (default `default`). Producers should set the key whenever possible so routing is explicit.
+- **Preferred:** non-empty UTF-8 string identifying the **sender** (`from_user`). The worker looks up the sender's followers in PostgreSQL and fans out to them.
+- **If omitted:** the worker falls back to `NOTIFY_DEFAULT_USER_ID` (default `default`) for routing, and `NOTIFY_FROM_USER` for the Redis `from_user` field. Producers should set the key whenever possible so routing is explicit.
 
 ### Message value (JSON)
 

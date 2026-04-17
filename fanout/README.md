@@ -21,7 +21,7 @@ Published JSON on `notif:{userID}` looks like:
 
 `{"id":…,"type":…,"from_user":…,"message":…,"timestamp":…}`
 
-Here `id`, `type`, `message` (from Kafka `detail`), and `timestamp` come from the Kafka payload. `from_user` is set from the worker env `NOTIFY_FROM_USER` only.
+Here `id`, `type`, `message` (from Kafka `detail`), and `timestamp` come from the Kafka payload. `from_user` comes from the Kafka message key; `NOTIFY_FROM_USER` is only used as a fallback when the key is empty.
 
 ## Regular Setup (3 workers, core stack)
 
@@ -35,13 +35,20 @@ This starts **Redis** (`redis`), Kafka, and **3 workers**. Wait until Kafka is h
 
 ### Worker and Redis environment (Compose defaults)
 
-| Variable | Purpose |
-| -------- | ------- |
-| `REDIS_ADDR` | Redis address (default in code: `localhost:6379`; Compose sets `redis:6379`) |
-| `NOTIFY_DEFAULT_USER_ID` | User id for `notif:{userID}` when the Kafka message has no key |
-| `NOTIFY_FROM_USER` | Redis JSON `from_user` (default `alice`) |
-| `NOTIFY_TYPE` | Loaded by the worker but **not** used for Redis when consuming Kafka (Kafka supplies `type`) |
-| `NOTIFY_MESSAGE` | Loaded by the worker but **not** used for Redis when consuming Kafka (Kafka `detail` becomes `message`) |
+| Variable | Default | Purpose |
+| -------- | ------- | ------- |
+| `HTTP_ADDR` | `:8080` | Address for the worker health-check HTTP server |
+| `KAFKA_BROKERS` | `localhost:9092` | Comma-separated Kafka bootstrap brokers |
+| `KAFKA_TOPIC` | `worker-events` | Kafka topic to consume |
+| `KAFKA_GROUP_ID` | `worker-skeleton` | Kafka consumer group |
+| `REDIS_ADDR` | `localhost:6379` | Redis address (Compose sets `redis:6379`) |
+| `DB_DSN` | `postgres://notif:notif@localhost:5432/notifications?sslmode=disable` | PostgreSQL connection string |
+| `NOTIFICATION_MODE` | `FAN_OUT_HYBRID` | Fan-out strategy: `FAN_OUT_READ`, `FAN_OUT_WRITE`, or `FAN_OUT_HYBRID` |
+| `FANOUT_THRESHOLD` | `1000` | Follower count above which `FAN_OUT_HYBRID` switches from write to read path |
+| `NOTIFY_DEFAULT_USER_ID` | `default` | Recipient user id for `notif:{userID}` when the Kafka message has no key |
+| `NOTIFY_FROM_USER` | `alice` | Redis JSON `from_user` fallback (Kafka message key takes precedence) |
+| `NOTIFY_TYPE` | `new_post` | Loaded by the worker but **not** used for Redis when consuming Kafka (Kafka supplies `type`) |
+| `NOTIFY_MESSAGE` | `Alice posted a photo` | Loaded by the worker but **not** used for Redis when consuming Kafka (Kafka `detail` becomes `message`) |
 
 ## Test Setup (include kafka-producer, redis-subscriber)
 

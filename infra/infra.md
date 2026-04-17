@@ -115,7 +115,7 @@ docker push ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/notif-system-ingestion:la
 ### Fan-out Worker
 
 ```bash
-docker build -t notif-system-fanout -f fanout/Dockerfile .
+docker buildx build --platform linux/amd64 --load --target worker -t notif-system-fanout -f fanout/Dockerfile .
 docker tag notif-system-fanout:latest ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/notif-system-fanout:latest
 docker push ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/notif-system-fanout:latest
 ```
@@ -135,7 +135,7 @@ wscat -c "ws://YOUR_ALB_DNS:8080/ws?user_id=user123"
 # fire a test event at the ingestion API
 curl -X POST http://INGESTION_TASK_IP:3000/event \
   -H "Content-Type: application/json" \
-  -d '{"type":"new_post","from_user":"alice","recipients":["user123"]}'
+  -d '{"type":"POST","from_user":"alice","detail":"Alice posted a photo"}'
 ```
 
 The notification should appear instantly in the wscat terminal.
@@ -184,5 +184,5 @@ infra/
 ├── msk.tf              — managed Kafka (MSK)
 ├── alb.tf              — load balancer for WebSocket gateway
 ├── ecs.tf              — ECS cluster, task definitions, services
-└── README.md           — this file
+└── infra.md            — this file
 ```

@@ -40,7 +40,7 @@ type conn struct {
 //  1. Read user_id from the query param (?user_id=123)
 //  2. Upgrade the HTTP connection to WebSocket
 //  3. Register user in Redis (ws:user:{userID} → taskID)
-//  4. Spawn 2 goroutines: one reader, one writer
+//  4. Spawn 3 goroutines: writer, reader, Redis subscriber
 //  5. Block until both goroutines exit (i.e. client disconnects)
 //  6. Deregister user from Redis
 func HandleWS(w http.ResponseWriter, r *http.Request) {
