@@ -43,8 +43,8 @@ func main() {
 	}()
 
 	// FanOuter — wraps publisher + DB, implements consumer.Notifier
-	// Switches between fan-out on write and fan-out on read based on follower count
-	fo := fanout.New(database, pub, cfg.FanoutThreshold)
+	// Strategy is controlled by NOTIFICATION_MODE (FAN_OUT_READ, FAN_OUT_WRITE, HYBRID)
+	fo := fanout.New(database, pub, cfg.FanoutThreshold, fanout.Mode(cfg.NotificationMode))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
