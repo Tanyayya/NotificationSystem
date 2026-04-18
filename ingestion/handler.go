@@ -74,5 +74,9 @@ func (h *Handler) HandleEvent(w http.ResponseWriter, r *http.Request) {
 	log.Printf("published event id=%d type=%s key=%s detail=%q ts_ms=%d",
 		event.ID, event.Type, req.FromUser, event.Detail, event.Timestamp)
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(struct {
+		EventID int64 `json:"event_id"`
+	}{EventID: event.ID})
 }
