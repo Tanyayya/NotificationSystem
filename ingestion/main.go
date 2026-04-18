@@ -4,7 +4,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-<<<<<<< HEAD
 	"strings"
 )
 
@@ -38,38 +37,19 @@ func main() {
 	}
 
 	producer, err := NewProducer(brokers, topic)
-=======
-)
-
-func main() {
-	// Reads the Kafka address from the environment. 
-	// If nothing is set, it defaults to kafka:9092 — which is the address Docker Compose uses internally.
-	broker := os.Getenv("KAFKA_BROKER")
-	if broker == "" {
-		broker = "kafka:9092"
-	}
-
-	// creates the kafka connection 
-	producer, err := NewProducer(broker)
->>>>>>> ts-notifications-read-api
 	if err != nil {
 		log.Fatalf("failed to create kafka producer: %v", err)
 	}
 	defer producer.Close()
 
-<<<<<<< HEAD
-=======
-	// Creates your handler  and gives it the Kafka producer.
->>>>>>> ts-notifications-read-api
 	h := &Handler{producer: producer}
 
 	http.HandleFunc("/event", h.HandleEvent)
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-<<<<<<< HEAD
-		w.Write([]byte("{'status': 'ok'}"))
-=======
->>>>>>> ts-notifications-read-api
+		w.Write([]byte(`{"status":"ok"}`))
+
 	})
 
 	port := os.Getenv("PORT")
