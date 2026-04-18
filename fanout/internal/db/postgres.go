@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"time"
 
 	_ "github.com/lib/pq" // PostgreSQL driver
 
@@ -64,15 +65,17 @@ func (d *DB) GetFollowers(ctx context.Context, followingID string) ([]string, er
 // delivered=false means the user hasn't received it yet —
 // the gateway replays these on reconnect.
 func (d *DB) InsertNotification(ctx context.Context, recipientID string, ev consumer.NotificationEvent) error {
+	createdAt := time.UnixMilli(ev.ID >> 22)
 	_, err := d.pool.ExecContext(ctx,
 		`INSERT INTO notifications (id, recipient_id, from_user, type, message, delivered, created_at)
-		 VALUES ($1, $2, $3, $4, $5, false, NOW())
+		 VALUES ($1, $2, $3, $4, $5, false, $6)
 		 ON CONFLICT (id, recipient_id) DO NOTHING`,
 		ev.ID,
 		recipientID,
 		ev.FromUser,
 		ev.Type,
 		ev.Detail,
+		createdAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert notification recipient=%s: %w", recipientID, err)
@@ -84,14 +87,16 @@ func (d *DB) InsertNotification(ctx context.Context, recipientID string, ev cons
 // Called for high-follower accounts instead of writing one row per follower.
 // Recipients are resolved at read time from the followers table.
 func (d *DB) InsertEvent(ctx context.Context, ev consumer.NotificationEvent) error {
+	createdAt := time.UnixMilli(ev.ID >> 22)
 	_, err := d.pool.ExecContext(ctx,
 		`INSERT INTO events (id, from_user, type, message, created_at)
-		 VALUES ($1, $2, $3, $4, NOW())
+		 VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (id) DO NOTHING`,
 		ev.ID,
 		ev.FromUser,
 		ev.Type,
 		ev.Detail,
+		createdAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert event: %w", err)
