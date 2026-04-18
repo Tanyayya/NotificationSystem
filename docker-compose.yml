@@ -1,4 +1,5 @@
 services:
+<<<<<<< HEAD
   redis:
     image: redis:7-alpine
     ports:
@@ -56,11 +57,14 @@ services:
       kafka:
         condition: service_healthy
 
+=======
+>>>>>>> ts-notifications-read-api
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.1
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+<<<<<<< HEAD
     ports:
       - "2181:2181"
     healthcheck:
@@ -88,14 +92,24 @@ services:
         quit
         ZK
         exit 0
+=======
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+>>>>>>> ts-notifications-read-api
 
   kafka:
     image: confluentinc/cp-kafka:7.6.1
     depends_on:
       zookeeper:
         condition: service_healthy
+<<<<<<< HEAD
       kafka-zk-prune:
         condition: service_completed_successfully
+=======
+>>>>>>> ts-notifications-read-api
     ports:
       - "9092:9092"
     environment:
@@ -109,14 +123,9 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     healthcheck:
-      test:
-        [
-          "CMD",
-          "kafka-broker-api-versions",
-          "--bootstrap-server",
-          "localhost:29092",
-        ]
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:29092"]
       interval: 10s
       timeout: 10s
       retries: 6
@@ -139,6 +148,44 @@ services:
           --topic "$${KAFKA_TOPIC}" \
           --partitions "$${KAFKA_TOPIC_PARTITIONS}" \
           --replication-factor 1
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: notifications
+      POSTGRES_USER: notif
+      POSTGRES_PASSWORD: notif
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notif"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: ingestion/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      KAFKA_BROKER: kafka:29092
+    depends_on:
+      kafka:
+        condition: service_healthy
 
   worker:
     build:
@@ -169,6 +216,36 @@ services:
     deploy:
       replicas: 3
 
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_ADDR: redis:6379
+      TASK_ID: local
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  readapi:
+    build:
+      context: .
+      dockerfile: readapi/Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      REDIS_ADDR: redis:6379
+      HTTP_ADDR: ":8082"
+      GIN_MODE: release
+      DATABASE_URL: postgres://notif:notif@postgres:5432/notifications
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
   redis-subscriber:
     profiles:
       - test-fanout
@@ -180,4 +257,29 @@ services:
       REDIS_ADDR: redis:6379
     depends_on:
       redis:
+<<<<<<< HEAD
         condition: service_healthy
+=======
+        condition: service_healthy
+
+  kafka-producer:
+    profiles:
+      - test-fanout
+    build:
+      context: .
+      dockerfile: ./fanout/Dockerfile
+      target: kafka-producer
+    environment:
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_TOPIC: worker-events
+      HTTP_ADDR: ":8081"
+      GIN_MODE: release
+      LOAD_PEAK_MSG_PER_SEC: "20"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    ports:
+      - "8081:8081"
+>>>>>>> ts-notifications-read-api
