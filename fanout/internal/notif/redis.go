@@ -4,10 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/Tanyayya/NotificationSystem/fanout/internal/consumer"
 	"github.com/redis/go-redis/v9"
 )
+
+// notifTTL is how long a user's notification history lives in Redis without a new
+// notification arriving. On each write the TTL is refreshed, so active users are
+// never evicted; inactive users expire after 7 days and the Read API falls back to
+// PostgreSQL.
+const notifTTL = 7 * 24 * time.Hour
 
 // Payload is the JSON body published to Redis channels notif:{userID}.
 type Payload struct {
@@ -41,7 +48,9 @@ func (p *Publisher) Close() error {
 	return p.rdb.Close()
 }
 
-// Publish sends a notification derived from the Kafka event to channel notif:{userID}.
+// Publish sends a notification derived from the Kafka event to channel notif:{userID},
+// persists it in the sorted set notifications:{userID} (score = timestamp ms),
+// and increments the unread badge counter unread:{userID}.
 // FromUser comes from worker config; id, type, message (detail), and timestamp come from the event.
 func (p *Publisher) Publish(ctx context.Context, userID string, ev consumer.NotificationEvent) error {
 	body, err := json.Marshal(Payload{
@@ -54,6 +63,34 @@ func (p *Publisher) Publish(ctx context.Context, userID string, ev consumer.Noti
 	if err != nil {
 		return fmt.Errorf("marshal notification: %w", err)
 	}
-	ch := "notif:" + userID
-	return p.rdb.Publish(ctx, ch, body).Err()
+
+	// Pub/Sub for real-time delivery to connected WebSocket clients.
+	if err := p.rdb.Publish(ctx, "notif:"+userID, body).Err(); err != nil {
+		return fmt.Errorf("publish to channel: %w", err)
+	}
+
+	// Persist in sorted set so the Read API can page through history.
+	// Score is the event timestamp in milliseconds for chronological ordering.
+	notifKey := "notifications:" + userID
+	if err := p.rdb.ZAdd(ctx, notifKey, redis.Z{
+		Score:  float64(ev.Timestamp),
+		Member: string(body),
+	}).Err(); err != nil {
+		return fmt.Errorf("zadd notification: %w", err)
+	}
+	// Refresh TTL on every write; the key expires only after 7 days of silence.
+	if err := p.rdb.Expire(ctx, notifKey, notifTTL).Err(); err != nil {
+		return fmt.Errorf("expire notifications key: %w", err)
+	}
+
+	// Increment unread badge counter; decremented by the Mark-Read API.
+	unreadKey := "unread:" + userID
+	if err := p.rdb.Incr(ctx, unreadKey).Err(); err != nil {
+		return fmt.Errorf("incr unread counter: %w", err)
+	}
+	if err := p.rdb.Expire(ctx, unreadKey, notifTTL).Err(); err != nil {
+		return fmt.Errorf("expire unread key: %w", err)
+	}
+
+	return nil
 }
