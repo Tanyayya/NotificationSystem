@@ -145,6 +145,84 @@ Example:
 
 ---
 
+## WebSocket (Gateway → Client)
+
+### Message types
+
+The gateway sends two distinct message types over the WebSocket connection, distinguished by the `type` field.
+
+#### `history` — sent on connect and on pagination response
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `string` | Always `"history"` |
+| `unread_count` | `number` | Total undelivered notifications at the time of the fetch |
+| `has_more` | `bool` | Whether another page of older notifications exists |
+| `notifications` | `array` | Up to 50 notification objects, newest-first |
+
+Each notification object:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `number` | Notification ID (int64) |
+| `from_user` | `string` | User who triggered the event |
+| `event_type` | `string` | `POST`, `LIKE`, or `COMMENT` |
+| `message` | `string` | Notification body |
+| `delivered` | `bool` | Whether it had been delivered before this fetch |
+| `timestamp` | `number` | Unix milliseconds from `created_at` |
+
+Example:
+```json
+{
+  "type": "history",
+  "unread_count": 2,
+  "has_more": false,
+  "notifications": [
+    { "id": 1743273600001, "from_user": "alice", "event_type": "POST", "message": "Alice posted a photo", "delivered": false, "timestamp": 1743273600123 }
+  ]
+}
+```
+
+#### `notification` — real-time push
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `string` | Always `"notification"` |
+| `id` | `number` | Notification ID |
+| `from_user` | `string` | Sender |
+| `event_type` | `string` | `POST`, `LIKE`, or `COMMENT` |
+| `message` | `string` | Notification body |
+| `timestamp` | `number` | Unix milliseconds |
+
+Example:
+```json
+{
+  "type": "notification",
+  "id": 1743273700001,
+  "from_user": "bob",
+  "event_type": "LIKE",
+  "message": "Bob liked your post",
+  "timestamp": 1743273700000
+}
+```
+
+### Message types (Client → Gateway)
+
+#### `fetch_history` — request the next page
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `string` | Always `"fetch_history"` |
+| `before_id` | `number` | ID of the oldest notification in the previous page (cursor) |
+| `limit` | `number` | Page size, capped at 50 server-side |
+
+Example:
+```json
+{ "type": "fetch_history", "before_id": 1743273600001, "limit": 50 }
+```
+
+---
+
 ## Versioning
 
 Any change to topic names, channel patterns, or required JSON fields should be updated here and treated as a **breaking** change for producers and subscribers unless backward compatibility is explicitly preserved.

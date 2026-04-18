@@ -3,13 +3,30 @@ package main
 import (
 	"log"
 	"net/http"
+
+	"github.com/Tanyayya/NotificationSystem/gateway/internal/history"
 )
+
+// historySvc is nil when PostgreSQL is unavailable — history is disabled but
+// real-time WebSocket delivery continues to work normally.
+var historySvc *history.Service
 
 func main() {
 	// Initialize Redis connection before accepting any WebSocket connections.
 	// This will fatal if Redis is unreachable — better to fail fast on startup
 	// than to discover Redis is down mid-connection.
 	initRedis()
+
+	// Initialize PostgreSQL for notification history.
+	// A failure here is non-fatal: the gateway degrades gracefully by skipping
+	// history on connect rather than refusing all connections.
+	db, err := history.OpenDB()
+	if err != nil {
+		log.Printf("warning: PostgreSQL unavailable, notification history disabled: %v", err)
+	} else {
+		historySvc = history.NewService(db)
+		log.Println("connected to PostgreSQL for notification history")
+	}
 
 	// /ws is the WebSocket endpoint — clients connect here to receive real-time notifications
 	// HandleWS is defined in handler.go

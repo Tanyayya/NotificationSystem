@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"sync"
 
+	"github.com/Tanyayya/NotificationSystem/gateway/internal/history"
 	"github.com/gorilla/websocket"
 )
 
@@ -33,6 +35,29 @@ type conn struct {
 	cancel  context.CancelFunc
 }
 
+// historyMsg is the envelope sent to the client for both the on-connect history
+// push and subsequent pagination responses.
+type historyMsg struct {
+	Type          string               `json:"type"`
+	UnreadCount   int                  `json:"unread_count"`
+	HasMore       bool                 `json:"has_more"`
+	Notifications []history.Notification `json:"notifications"`
+}
+
+// marshalHistory serialises a history.Result into the wire format sent to clients.
+func marshalHistory(r history.Result) ([]byte, error) {
+	notifs := r.Notifications
+	if notifs == nil {
+		notifs = []history.Notification{}
+	}
+	return json.Marshal(historyMsg{
+		Type:          "history",
+		UnreadCount:   r.UnreadCount,
+		HasMore:       r.HasMore,
+		Notifications: notifs,
+	})
+}
+
 // HandleWS is the entry point for all WebSocket connections.
 // It is called by main.go whenever a client hits the /ws endpoint.
 //
@@ -40,9 +65,10 @@ type conn struct {
 //  1. Read user_id from the query param (?user_id=123)
 //  2. Upgrade the HTTP connection to WebSocket
 //  3. Register user in Redis (ws:user:{userID} → taskID)
-//  4. Spawn 3 goroutines: writer, reader, Redis subscriber
-//  5. Block until both goroutines exit (i.e. client disconnects)
-//  6. Deregister user from Redis
+//  4. Fetch and enqueue notification history (if PostgreSQL is available)
+//  5. Spawn 3 goroutines: writer, reader, Redis subscriber
+//  6. Block until all goroutines exit (i.e. client disconnects)
+//  7. Deregister user from Redis
 func HandleWS(w http.ResponseWriter, r *http.Request) {
 	// Extract user_id from query params — e.g. ws://localhost:8080/ws?user_id=123
 	userID := r.URL.Query().Get("user_id")
@@ -85,7 +111,23 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("user %s connected", userID)
 
-	// WaitGroup ensures HandleWS blocks until both goroutines have fully exited
+	// Fetch and enqueue notification history before starting goroutines.
+	// writeCh is buffered (64 slots) so this single message fits without blocking.
+	// If PostgreSQL is unavailable historySvc is nil and history is silently skipped.
+	if historySvc != nil {
+		result, err := historySvc.GetHistory(ctx, userID, 0, 50)
+		if err != nil {
+			log.Printf("history fetch error for user %s: %v", userID, err)
+		} else {
+			if b, err := marshalHistory(result); err == nil {
+				c.writeCh <- b
+			} else {
+				log.Printf("history marshal error for user %s: %v", userID, err)
+			}
+		}
+	}
+
+	// WaitGroup ensures HandleWS blocks until all goroutines have fully exited
 	// before we run cleanup
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -98,8 +140,7 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Reader goroutine — listens for incoming messages from the client.
-	// Its main job is detecting disconnects and triggering cancel()
-	// so the writer and subscriber shut down too.
+	// Handles fetch_history pagination requests and detects disconnects.
 	go func() {
 		defer wg.Done()
 		c.reader(ctx)
@@ -113,7 +154,7 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 		subscribeNotifications(ctx, userID, c.writeCh)
 	}()
 
-	// Block here until both goroutines exit
+	// Block here until all goroutines exit
 	wg.Wait()
 
 	// Deregister the user from Redis now that the connection is gone
@@ -148,14 +189,20 @@ func (c *conn) writer(ctx context.Context) {
 	}
 }
 
+// fetchHistoryReq is the shape of an inbound fetch_history message from the client.
+type fetchHistoryReq struct {
+	Type     string `json:"type"`
+	BeforeID int64  `json:"before_id"`
+	Limit    int    `json:"limit"`
+}
+
 // reader blocks waiting for messages from the client.
-// In Week 1 clients don't send us anything meaningful — we just drain reads.
-// Its real job is detecting when the client disconnects and calling cancel()
-// to tear down the whole connection cleanly.
+// It handles fetch_history pagination requests and detects disconnects,
+// calling cancel() to tear down the whole connection cleanly on exit.
 func (c *conn) reader(ctx context.Context) {
 	defer c.cancel() // always trigger shutdown when reader exits
 	for {
-		_, _, err := c.ws.ReadMessage()
+		_, msg, err := c.ws.ReadMessage()
 		if err != nil {
 			// IsUnexpectedCloseError filters out normal closure codes (e.g. browser tab closed)
 			// and only logs truly unexpected disconnects
@@ -167,6 +214,38 @@ func (c *conn) reader(ctx context.Context) {
 			}
 			return
 		}
-		// Drain any messages the client sends — not used in Week 1
+
+		var req fetchHistoryReq
+		if err := json.Unmarshal(msg, &req); err != nil || req.Type != "fetch_history" {
+			// Ignore malformed or unknown messages
+			continue
+		}
+
+		if historySvc == nil {
+			continue
+		}
+
+		limit := req.Limit
+		if limit <= 0 || limit > 50 {
+			limit = 50
+		}
+
+		result, err := historySvc.GetHistory(ctx, c.userID, req.BeforeID, limit)
+		if err != nil {
+			log.Printf("fetch_history error for user %s: %v", c.userID, err)
+			continue
+		}
+
+		b, err := marshalHistory(result)
+		if err != nil {
+			log.Printf("fetch_history marshal error for user %s: %v", c.userID, err)
+			continue
+		}
+
+		select {
+		case c.writeCh <- b:
+		default:
+			log.Printf("writeCh full for user %s, dropping history page", c.userID)
+		}
 	}
 }
