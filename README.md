@@ -124,10 +124,11 @@ curl -X POST http://INGESTION_TASK_IP:3000/event \
 
 Valid `type` values: `POST`, `LIKE`, `COMMENT` (case-sensitive).
 
-Expected result — notification appears in wscat terminal:
+Expected result — on connect, a history envelope appears first, then real-time notifications arrive as events are posted:
 
 ```json
-{"id":...,"type":"POST","from_user":"alice","message":"Alice posted a photo","timestamp":...}
+{ "type": "history", "unread_count": 0, "has_more": false, "notifications": [] }
+{ "type": "notification", "id": ..., "from_user": "alice", "event_type": "POST", "message": "Alice posted a photo", "timestamp": ... }
 ```
 
 ### Step 6 — Tear Down
@@ -146,15 +147,30 @@ terraform destroy   # MSK takes a few minutes to delete
 | Layer                        | Role                                                                                                                                                |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Event Ingestion API** (Go) | `POST /event`; Snowflake IDs for ordering; events published to **Kafka** partitioned by sender id for per-user ordering.                            |
-| **Fan-out Workers** (Go)     | Consume Kafka; **hybrid fan-out** — write path for typical users, read path for high-follower accounts; crossover threshold tuned empirically.      |
-| **Redis**                    | Pub/Sub for cross-instance delivery; sorted sets for paginated history (`ZADD` / `ZREVRANGE`); atomic counters for unread badges (`INCR` / `DECR`). |
-| **WebSocket Gateway** (Go)   | One goroutine per connection on ECS; user→gateway mapping in Redis; offline users get backlog replay from **PostgreSQL** on reconnect.              |
+| **Fan-out Workers** (Go)     | Consume Kafka; fan-out strategy set by `NOTIFICATION_MODE` (`FAN_OUT_WRITE`, `FAN_OUT_READ`, or `FAN_OUT_HYBRID`). Hybrid mode switches between write and read paths based on `FANOUT_THRESHOLD`. |
+| **Redis**                    | Pub/Sub for cross-instance delivery (`notif:{userID}`); session keys for user→gateway mapping (`ws:user:{userID}`). |
+| **WebSocket Gateway** (Go)   | One goroutine per connection on ECS; user→gateway mapping in Redis; sends notification history from **PostgreSQL** on connect with cursor-based pagination; real-time delivery via Redis Pub/Sub. |
 
 ---
 
 ## Contracts
 
 Topic names, Kafka message shapes, consumer configuration, and Redis channels for the fan-out path are specified in **[CONTRACTS.md](CONTRACTS.md)**.
+
+---
+
+## Seed Data
+
+The database is preloaded with follower relationships for four test users, designed to exercise different fan-out strategies:
+
+| User | Followers | IDs | Fan-out path (default threshold 1000) |
+|------|-----------|-----|---------------------------------------|
+| `alice` | 10 | `follower_a_1` … `follower_a_10` | Write |
+| `bob` | 100 | `follower_b_1` … `follower_b_100` | Write |
+| `carol` | 1,000 | `follower_c_1` … `follower_c_1000` | Write (at threshold) |
+| `dave` | 10,000 | `follower_d_1` … `follower_d_10000` | Read |
+
+To test notification history, connect as one of the follower IDs (e.g. `follower_a_1`) and post an event from the corresponding user (`alice`).
 
 ---
 

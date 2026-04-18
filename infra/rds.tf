@@ -36,3 +36,15 @@ resource "aws_db_instance" "postgres" {
     Project = var.project_name
   }
 }
+
+# Run init.sql once when the RDS instance is first created.
+# Triggered by the RDS instance ID — only re-runs if the DB is destroyed and recreated.
+resource "null_resource" "db_init" {
+  triggers = {
+    db_instance_id = aws_db_instance.postgres.id
+  }
+
+  provisioner "local-exec" {
+    command = "psql postgresql://${aws_db_instance.postgres.username}:${var.db_password}@${aws_db_instance.postgres.endpoint}/${aws_db_instance.postgres.db_name} -f ${path.module}/../db/init.sql"
+  }
+}

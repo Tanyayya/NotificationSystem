@@ -36,8 +36,11 @@ services:
     environment:
       REDIS_ADDR: redis:6379
       TASK_ID: docker-gateway
+      DB_DSN: postgres://notif:notif@postgres:5432/notifications?sslmode=disable
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
 
   ingestion:

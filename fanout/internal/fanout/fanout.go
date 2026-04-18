@@ -9,26 +9,37 @@ import (
 	"github.com/Tanyayya/NotificationSystem/fanout/internal/notif"
 )
 
+// Mode controls which fan-out strategy the worker uses.
+type Mode string
+
+const (
+	ModeRead   Mode = "FAN_OUT_READ"
+	ModeWrite  Mode = "FAN_OUT_WRITE"
+	ModeHybrid Mode = "FAN_OUT_HYBRID"
+)
+
 // FanOuter sits between the Kafka consumer and the Redis publisher.
 // It implements consumer.Notifier so it can be passed directly to consumer.Run.
 //
 // For each event it:
-//   1. Looks up the follower list from PostgreSQL
-//   2. Chooses fan-out on write or fan-out on read based on follower count
-//   3. Fan-out on write: persists one notification per follower + publishes to Redis
-//   4. Fan-out on read:  persists one event record (stub — read path not yet implemented)
+//  1. Looks up the follower list from PostgreSQL
+//  2. Chooses fan-out on write or fan-out on read based on mode (and threshold for HYBRID)
+//  3. Fan-out on write: persists one notification per follower + publishes to Redis
+//  4. Fan-out on read:  persists one event record (stub — read path not yet implemented)
 type FanOuter struct {
 	db        *db.DB
 	publisher *notif.Publisher
-	threshold int // follower count above which we switch to fan-out on read
+	threshold int  // follower count above which HYBRID switches to fan-out on read
+	mode      Mode // fan-out strategy: FAN_OUT_READ, FAN_OUT_WRITE, or HYBRID
 }
 
-// New creates a FanOuter with the given DB, Redis publisher, and fan-out threshold.
-func New(database *db.DB, publisher *notif.Publisher, threshold int) *FanOuter {
+// New creates a FanOuter with the given DB, Redis publisher, threshold, and mode.
+func New(database *db.DB, publisher *notif.Publisher, threshold int, mode Mode) *FanOuter {
 	return &FanOuter{
 		db:        database,
 		publisher: publisher,
 		threshold: threshold,
+		mode:      mode,
 	}
 }
 
@@ -36,7 +47,13 @@ func New(database *db.DB, publisher *notif.Publisher, threshold int) *FanOuter {
 // fromUser is the Kafka message key — the person who triggered the event.
 // The fan-out worker calls this once per Kafka message.
 func (f *FanOuter) Publish(ctx context.Context, fromUser string, ev consumer.NotificationEvent) error {
-	// Step 1: look up all followers of fromUser
+	// FAN_OUT_READ skips the follower lookup — one event record stored, no per-follower writes.
+	if f.mode == ModeRead {
+		log.Printf("fanout: mode=%s user=%q", f.mode, fromUser)
+		return f.fanoutOnRead(ctx, ev)
+	}
+
+	// All other modes need the follower list.
 	followers, err := f.db.GetFollowers(ctx, fromUser)
 	if err != nil {
 		return err
@@ -47,13 +64,17 @@ func (f *FanOuter) Publish(ctx context.Context, fromUser string, ev consumer.Not
 		return nil
 	}
 
-	log.Printf("fanout: user=%q followers=%d threshold=%d", fromUser, len(followers), f.threshold)
-
-	// Step 2: choose strategy based on follower count
-	if len(followers) <= f.threshold {
+	switch f.mode {
+	case ModeWrite:
+		log.Printf("fanout: mode=%s user=%q followers=%d", f.mode, fromUser, len(followers))
 		return f.fanoutOnWrite(ctx, followers, ev)
+	default: // ModeHybrid
+		log.Printf("fanout: mode=%s user=%q followers=%d threshold=%d", f.mode, fromUser, len(followers), f.threshold)
+		if len(followers) <= f.threshold {
+			return f.fanoutOnWrite(ctx, followers, ev)
+		}
+		return f.fanoutOnRead(ctx, ev)
 	}
-	return f.fanoutOnRead(ctx, ev)
 }
 
 // fanoutOnWrite is the write path — used for normal users under the threshold.

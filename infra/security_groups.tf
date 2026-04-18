@@ -110,11 +110,19 @@ resource "aws_security_group" "fanout" {
   }
 }
 
-# RDS Security Group — accepts PostgreSQL traffic from fanout worker and local machine
+# RDS Security Group — accepts PostgreSQL traffic from gateway, fanout worker, and local machine
 resource "aws_security_group" "rds" {
   name        = "${var.project_name}-rds-sg"
-  description = "Allow PostgreSQL traffic from fanout worker and local machine"
+  description = "Allow PostgreSQL traffic from gateway, fanout worker, and local machine"
   vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description     = "PostgreSQL from gateway (notification history)"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.gateway.id]
+  }
 
   ingress {
     description     = "PostgreSQL from fanout worker"
