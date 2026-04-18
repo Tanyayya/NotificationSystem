@@ -48,14 +48,10 @@ func (p *Publisher) Close() error {
 	return p.rdb.Close()
 }
 
-<<<<<<< HEAD
-// Publish sends a notification derived from the Kafka event to channel notif:{userID}.
-=======
 // Publish sends a notification derived from the Kafka event to channel notif:{userID},
 // persists it in the sorted set notifications:{userID} (score = timestamp ms),
 // and increments the unread badge counter unread:{userID}.
 // FromUser comes from worker config; id, type, message (detail), and timestamp come from the event.
->>>>>>> ts-notifications-read-api
 func (p *Publisher) Publish(ctx context.Context, userID string, ev consumer.NotificationEvent) error {
 	fromUser := ev.FromUser
 	if fromUser == "" {
