@@ -20,7 +20,7 @@ type EventRequest struct {
 // KafkaEvent is the full payload published to Kafka.
 // Shape matches fanout/internal/consumer.NotificationEvent JSON fields.
 type KafkaEvent struct {
-	ID        string `json:"id"`
+	ID        int64  `json:"id"`
 	Type      string `json:"type"`
 	Detail    string `json:"detail"`
 	Timestamp int64  `json:"timestamp"`
@@ -71,7 +71,7 @@ func (h *Handler) HandleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("published event id=%s type=%s key=%s detail=%q ts_ms=%d",
+	log.Printf("published event id=%d type=%s key=%s detail=%q ts_ms=%d",
 		event.ID, event.Type, req.FromUser, event.Detail, event.Timestamp)
 
 	w.WriteHeader(http.StatusOK)
