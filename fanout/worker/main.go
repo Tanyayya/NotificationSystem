@@ -42,9 +42,9 @@ func main() {
 		}
 	}()
 
-	// FanOuter — wraps publisher + DB, implements consumer.Notifier
-	// Strategy is controlled by NOTIFICATION_MODE (FAN_OUT_READ, FAN_OUT_WRITE, FAN_OUT_HYBRID)
-	fo := fanout.New(database, pub, cfg.FanoutThreshold, fanout.Mode(cfg.NotificationMode))
+	// FanOuter — wraps publisher + DB, implements consumer.Notifier.
+	// Fan-out mode is encoded in each Kafka message by the ingester.
+	fo := fanout.New(database, pub)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -71,7 +71,7 @@ func main() {
 	// Pass FanOuter as the Notifier — consumer.Run calls fo.Publish per Kafka message
 	consumerDone := make(chan error, 1)
 	go func() {
-		consumerDone <- consumer.Run(ctx, cfg.Brokers, cfg.Topic, cfg.GroupID, cfg.NotifyDefaultUserID, fo)
+		consumerDone <- consumer.Run(ctx, cfg.Brokers, cfg.Topic, cfg.GroupID, fo)
 	}()
 
 	<-ctx.Done()

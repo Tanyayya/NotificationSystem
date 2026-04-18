@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-<<<<<<< HEAD
 	"slices"
 	"time"
 )
@@ -15,49 +14,29 @@ var allowedEventTypes = []string{"POST", "LIKE", "COMMENT"}
 type EventRequest struct {
 	Type     string `json:"type"`
 	FromUser string `json:"from_user"`
-	Details  string `json:"detail"`
+	Detail   string `json:"detail"`
 }
 
 // KafkaEvent is the full payload published to Kafka.
-// Shape matches fanout/internal/consumer.NotificationEvent JSON fields.
+// Mode is "write" for pre-addressed messages (key = recipient_id)
+// and "read" for single-event messages consumed by fan-out-on-read (key = from_user).
 type KafkaEvent struct {
 	ID        int64  `json:"id"`
 	Type      string `json:"type"`
 	Detail    string `json:"detail"`
+	FromUser  string `json:"from_user"`
 	Timestamp int64  `json:"timestamp"`
-=======
-)
-
-// EventRequest is the body the client sends to POST /event.
-// Matches Contract 1 (minus the id, which we assign here).
-type EventRequest struct {
-	Type      string   `json:"type"`
-	FromUser  string   `json:"from_user"`
-	Recipients []string `json:"recipients"`
-}
-
-// KafkaEvent is the full payload published to Kafka.
-// fan-out worker consumes this.
-type KafkaEvent struct {
-	ID         string   `json:"id"`
-	Type       string   `json:"type"`
-	FromUser   string   `json:"from_user"`
-	Recipients []string `json:"recipients"`
->>>>>>> ts-notifications-read-api
+	Mode      string `json:"mode"`
 }
 
 type Handler struct {
-	producer *Producer
+	producer  *Producer
+	db        *FollowerDB
+	mode      string // FAN_OUT_WRITE, FAN_OUT_READ, or FAN_OUT_HYBRID
+	threshold int    // follower count above which HYBRID switches to fan-out-on-read
 }
 
-<<<<<<< HEAD
 func (h *Handler) HandleEvent(w http.ResponseWriter, r *http.Request) {
-=======
-// This function runs every time someone calls POST /event
-func (h *Handler) HandleEvent(w http.ResponseWriter, r *http.Request) {
-	// Only allow POST requests. If someone sends a GET, return 405.
-
->>>>>>> ts-notifications-read-api
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -69,61 +48,101 @@ func (h *Handler) HandleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-<<<<<<< HEAD
 	if req.Type == "" || req.FromUser == "" {
 		http.Error(w, "type and from_user are required", http.StatusBadRequest)
 		return
 	}
 	if !slices.Contains(allowedEventTypes, req.Type) {
 		http.Error(w, "type must be one of POST, LIKE, COMMENT", http.StatusBadRequest)
-=======
-	if req.Type == "" || req.FromUser == "" || len(req.Recipients) == 0 {
-		http.Error(w, "type, from_user, and recipients are required", http.StatusBadRequest)
->>>>>>> ts-notifications-read-api
 		return
 	}
 
 	event := KafkaEvent{
-<<<<<<< HEAD
 		ID:        NewSnowflakeID(),
 		Type:      req.Type,
-		Detail:    req.Details,
+		Detail:    req.Detail,
+		FromUser:  req.FromUser,
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-=======
-		ID:         NewSnowflakeID(),
-		Type:       req.Type,
-		FromUser:   req.FromUser,
-		Recipients: req.Recipients,
-	}
+	ctx := r.Context()
 
-	// Convert the struct to JSON bytes so it can be sent over Kafka.
->>>>>>> ts-notifications-read-api
-	payload, err := json.Marshal(event)
-	if err != nil {
-		log.Printf("marshal error: %v", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+	switch h.mode {
+	case "FAN_OUT_READ":
+		if err := h.publishRead(event); err != nil {
+			log.Printf("kafka publish error: %v", err)
+			http.Error(w, "failed to publish event", http.StatusInternalServerError)
+			return
+		}
+	case "FAN_OUT_WRITE":
+		followers, err := h.db.GetFollowers(ctx, req.FromUser)
+		if err != nil {
+			log.Printf("follower lookup error user=%s: %v", req.FromUser, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if err := h.publishWrite(event, followers); err != nil {
+			log.Printf("kafka publish error: %v", err)
+			http.Error(w, "failed to publish event", http.StatusInternalServerError)
+			return
+		}
+	default: // FAN_OUT_HYBRID
+		followers, err := h.db.GetFollowers(ctx, req.FromUser)
+		if err != nil {
+			log.Printf("follower lookup error user=%s: %v", req.FromUser, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if len(followers) > h.threshold {
+			if err := h.publishRead(event); err != nil {
+				log.Printf("kafka publish error: %v", err)
+				http.Error(w, "failed to publish event", http.StatusInternalServerError)
+				return
+			}
+		} else {
+			if err := h.publishWrite(event, followers); err != nil {
+				log.Printf("kafka publish error: %v", err)
+				http.Error(w, "failed to publish event", http.StatusInternalServerError)
+				return
+			}
+		}
 	}
-
-<<<<<<< HEAD
-	if err := h.producer.Publish(req.FromUser, payload); err != nil {
-=======
-	if err := h.producer.Publish(payload); err != nil {
->>>>>>> ts-notifications-read-api
-		log.Printf("kafka publish error: %v", err)
-		http.Error(w, "failed to publish event", http.StatusInternalServerError)
-		return
-	}
-
-<<<<<<< HEAD
-	log.Printf("published event id=%d type=%s key=%s detail=%q ts_ms=%d",
-		event.ID, event.Type, req.FromUser, event.Detail, event.Timestamp)
-=======
-	log.Printf("published event id=%s type=%s from=%s recipients=%v",
-		event.ID, event.Type, event.FromUser, event.Recipients)
->>>>>>> ts-notifications-read-api
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// publishWrite publishes one Kafka message per follower, keyed by follower ID.
+// With no followers, nothing would reach the worker for DB persistence; use the
+// read path (one message, one events row) instead.
+func (h *Handler) publishWrite(event KafkaEvent, followers []string) error {
+	if len(followers) == 0 {
+		return h.publishRead(event)
+	}
+	event.Mode = "write"
+	for _, followerID := range followers {
+		payload, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		if err := h.producer.Publish(followerID, payload); err != nil {
+			return err
+		}
+		log.Printf("published event id=%d type=%s from=%s to=%s", event.ID, event.Type, event.FromUser, followerID)
+	}
+	return nil
+}
+
+// publishRead publishes a single Kafka message keyed by the sender ID.
+// The fan-out worker will store it as one event record; recipients are resolved at read time.
+func (h *Handler) publishRead(event KafkaEvent) error {
+	event.Mode = "read"
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	if err := h.producer.Publish(event.FromUser, payload); err != nil {
+		return err
+	}
+	log.Printf("published read-mode event id=%d type=%s from=%s", event.ID, event.Type, event.FromUser)
+	return nil
 }

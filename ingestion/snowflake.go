@@ -9,30 +9,10 @@ import (
 // 22-bit monotonic sequence in the low bits.
 // Result is a positive int64, monotonically increasing with time.
 
-var seq uint64
+var snowflakeSeq uint64
 
 func NewSnowflakeID() int64 {
-	s := atomic.AddUint64(&seq, 1) & 0x3FFFFF // 22 bits
+	s := atomic.AddUint64(&snowflakeSeq, 1) & 0x3FFFFF // 22 bits
 	ms := uint64(time.Now().UnixMilli())
 	return int64((ms << 22) | s)
-}
-
-package main
-
-import (
-	"fmt"
-	"sync/atomic"
-	"time"
-)
-
-// Simple Snowflake-style ID: timestamp (ms) + monotonic sequence.
-// Format: "<unix_ms>-<seq>"
-// Good enough for Week 1; swap for a real Snowflake library in production.
-
-var seq uint64
-
-func NewSnowflakeID() string {
-	s := atomic.AddUint64(&seq, 1)
-	ms := time.Now().UnixMilli()
-	return fmt.Sprintf("%d-%d", ms, s)
 }

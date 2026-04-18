@@ -4,7 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-<<<<<<< HEAD
+	"strconv"
 	"strings"
 )
 
@@ -32,44 +32,51 @@ func parseKafkaBrokers() []string {
 
 func main() {
 	brokers := parseKafkaBrokers()
+
 	topic := strings.TrimSpace(os.Getenv("KAFKA_TOPIC"))
 	if topic == "" {
 		topic = "worker-events"
 	}
 
 	producer, err := NewProducer(brokers, topic)
-=======
-)
-
-func main() {
-	// Reads the Kafka address from the environment. 
-	// If nothing is set, it defaults to kafka:9092 — which is the address Docker Compose uses internally.
-	broker := os.Getenv("KAFKA_BROKER")
-	if broker == "" {
-		broker = "kafka:9092"
-	}
-
-	// creates the kafka connection 
-	producer, err := NewProducer(broker)
->>>>>>> ts-notifications-read-api
 	if err != nil {
 		log.Fatalf("failed to create kafka producer: %v", err)
 	}
 	defer producer.Close()
 
-<<<<<<< HEAD
-=======
-	// Creates your handler  and gives it the Kafka producer.
->>>>>>> ts-notifications-read-api
-	h := &Handler{producer: producer}
+	dsn := os.Getenv("DB_DSN")
+	if dsn == "" {
+		dsn = "postgres://notif:notif@localhost:5432/notifications?sslmode=disable"
+	}
+	followerDB, err := NewFollowerDB(dsn)
+	if err != nil {
+		log.Fatalf("failed to connect to postgres: %v", err)
+	}
+	defer followerDB.Close()
+
+	mode := strings.TrimSpace(os.Getenv("NOTIFICATION_MODE"))
+	if mode == "" {
+		mode = "FAN_OUT_HYBRID"
+	}
+
+	threshold := 1000
+	if t := strings.TrimSpace(os.Getenv("FANOUT_THRESHOLD")); t != "" {
+		if v, err := strconv.Atoi(t); err == nil {
+			threshold = v
+		}
+	}
+
+	h := &Handler{
+		producer:  producer,
+		db:        followerDB,
+		mode:      mode,
+		threshold: threshold,
+	}
 
 	http.HandleFunc("/event", h.HandleEvent)
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-<<<<<<< HEAD
-		w.Write([]byte("{'status': 'ok'}"))
-=======
->>>>>>> ts-notifications-read-api
+		w.Write([]byte(`{"status":"ok"}`))
 	})
 
 	port := os.Getenv("PORT")
