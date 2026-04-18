@@ -60,3 +60,40 @@ func (p *Publisher) Publish(ctx context.Context, userID string, ev consumer.Noti
 	ch := "notif:" + userID
 	return p.rdb.Publish(ctx, ch, body).Err()
 }
+
+// PublishPipeline sends the same notification payload to notif:{userID} for each userID
+// using a Redis pipeline (one round trip). Returns the number of PUBLISH commands that failed.
+// Empty userIDs returns failCount 0.
+func (p *Publisher) PublishPipeline(ctx context.Context, userIDs []string, ev consumer.NotificationEvent) (failCount int, err error) {
+	if len(userIDs) == 0 {
+		return 0, nil
+	}
+	fromUser := ev.FromUser
+	if fromUser == "" {
+		fromUser = p.payload.FromUser
+	}
+	body, err := json.Marshal(Payload{
+		ID:        ev.ID,
+		Type:      ev.Type,
+		FromUser:  fromUser,
+		Message:   ev.Detail,
+		Timestamp: ev.Timestamp,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("marshal notification: %w", err)
+	}
+	pipe := p.rdb.Pipeline()
+	for _, userID := range userIDs {
+		pipe.Publish(ctx, "notif:"+userID, body)
+	}
+	cmds, pipeErr := pipe.Exec(ctx)
+	for _, cmd := range cmds {
+		if cmd.Err() != nil {
+			failCount++
+		}
+	}
+	if pipeErr != nil && len(cmds) == 0 {
+		return len(userIDs), pipeErr
+	}
+	return failCount, nil
+}
