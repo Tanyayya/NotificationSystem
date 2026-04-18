@@ -47,7 +47,7 @@ func fetchRows(ctx context.Context, db *sql.DB, recipientID string, beforeID int
 		SELECT id, recipient_id, from_user, type, message, delivered, created_at, FALSE AS from_events
 		FROM notifications
 		WHERE recipient_id = $1
-		  AND ($2 = 0 OR id < $2)
+		  AND ($2::bigint = 0 OR id < $2::bigint)
 
 		UNION ALL
 
@@ -56,7 +56,7 @@ func fetchRows(ctx context.Context, db *sql.DB, recipientID string, beforeID int
 		FROM events e
 		JOIN followers f ON f.following_id = e.from_user
 		WHERE f.follower_id = $1
-		  AND ($2 = 0 OR e.id < $2)
+		  AND ($2::bigint = 0 OR e.id < $2::bigint)
 		  AND NOT EXISTS (
 		      SELECT 1 FROM notifications n
 		      WHERE n.id = e.id AND n.recipient_id = $1

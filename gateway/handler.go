@@ -215,6 +215,8 @@ func (c *conn) reader(ctx context.Context) {
 			return
 		}
 
+		log.Printf("received message from user %s: %s", c.userID, msg)
+
 		var req fetchHistoryReq
 		if err := json.Unmarshal(msg, &req); err != nil || req.Type != "fetch_history" {
 			// Ignore malformed or unknown messages
