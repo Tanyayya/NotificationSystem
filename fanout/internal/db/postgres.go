@@ -37,29 +37,6 @@ func (d *DB) Close() error {
 	return d.pool.Close()
 }
 
-// GetFollowers returns the list of follower IDs for a given user.
-// These are the users who should receive a notification when followingID posts.
-func (d *DB) GetFollowers(ctx context.Context, followingID string) ([]string, error) {
-	rows, err := d.pool.QueryContext(ctx,
-		`SELECT follower_id FROM followers WHERE following_id = $1`,
-		followingID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query followers: %w", err)
-	}
-	defer rows.Close()
-
-	var followers []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan follower: %w", err)
-		}
-		followers = append(followers, id)
-	}
-	return followers, rows.Err()
-}
-
 // InsertNotification writes one notification record per recipient.
 // Called during fan-out on write for each follower.
 // delivered=false means the user hasn't received it yet —

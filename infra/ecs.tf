@@ -116,7 +116,10 @@ resource "aws_ecs_task_definition" "ingestion" {
 
       environment = [
         { name = "KAFKA_BROKERS", value = aws_msk_cluster.main.bootstrap_brokers },
-        { name = "KAFKA_TOPIC", value = "worker-events" }
+        { name = "KAFKA_TOPIC", value = "worker-events" },
+        { name = "DB_DSN", value = "postgres://notif:${var.db_password}@${aws_db_instance.postgres.address}:5432/notifications?sslmode=require" },
+        { name = "NOTIFICATION_MODE", value = "FAN_OUT_HYBRID" },
+        { name = "FANOUT_THRESHOLD", value = "1000" }
       ]
 
       logConfiguration = {
@@ -180,7 +183,8 @@ resource "aws_ecs_task_definition" "fanout" {
         { name = "REDIS_ADDR", value = "${aws_elasticache_cluster.redis.cache_nodes[0].address}:6379" },
         { name = "DB_DSN", value = "postgres://notif:${var.db_password}@${aws_db_instance.postgres.address}:5432/notifications?sslmode=require" },
         { name = "FANOUT_THRESHOLD", value = "1000" },
-        { name = "NOTIFICATION_MODE", value = "FAN_OUT_WRITE" }
+        { name = "NOTIFICATION_MODE", value = "FAN_OUT_WRITE" },
+        { name = "DB_DSN", value = "postgres://notif:${var.db_password}@${aws_db_instance.postgres.address}:5432/notifications?sslmode=require" }
       ]
 
       logConfiguration = {

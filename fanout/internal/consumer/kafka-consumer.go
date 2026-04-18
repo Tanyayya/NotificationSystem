@@ -13,16 +13,17 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-// NotificationEvent combines the Kafka message key (FromUser) with the JSON value body.
-// ID is the notification snowflake; Type names the notification kind (e.g. Like, Comment, Post);
-// Detail carries any extra context for the recipient.
-// Timestamp is Unix milliseconds since the epoch (JSON field "timestamp").
+// NotificationEvent combines the parsed Kafka message key and JSON value body.
+// For mode="write" messages the key is the recipient ID (pre-resolved by the ingester).
+// For mode="read" messages the key is the sender ID; the fan-out worker stores one event record.
 type NotificationEvent struct {
-	ID        int64
-	Type      string
-	Detail    string
-	Timestamp int64
-	FromUser  string
+	ID          int64
+	Type        string
+	Detail      string
+	Timestamp   int64
+	FromUser    string
+	RecipientID string // populated from the Kafka message key
+	Mode        string // "write" or "read"
 }
 
 // parseSnowflakeID decodes a JSON id field as a number or a base-10 string.
@@ -45,14 +46,15 @@ func parseSnowflakeID(raw json.RawMessage) (int64, error) {
 	return n, nil
 }
 
-// Notifier publishes to Redis after a Kafka message is processed.
+// Notifier processes a notification event after it is read from Kafka.
 type Notifier interface {
-	Publish(ctx context.Context, userID string, ev NotificationEvent) error
+	Publish(ctx context.Context, keyID string, ev NotificationEvent) error
 }
 
 // Run reads messages from the given topic until the context is cancelled.
-// defaultUserID is reserved for future recipient resolution; publishing uses placeholder recipient ids. On Redis publish failure per recipient, the error is logged and the message is still committed.
-func Run(ctx context.Context, brokers []string, topic, groupID string, defaultUserID string, n Notifier) error {
+// keyID passed to Publish is the raw Kafka message key — recipient ID for write-mode
+// messages, sender ID for read-mode messages.
+func Run(ctx context.Context, brokers []string, topic, groupID string, n Notifier) error {
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:  brokers,
 		Topic:    topic,
@@ -82,10 +84,12 @@ func Run(ctx context.Context, brokers []string, topic, groupID string, defaultUs
 		}
 
 		var raw struct {
-			ID        json.RawMessage `json:"id"`
-			Type      string          `json:"type"`
-			Detail    string          `json:"detail"`
-			Timestamp int64           `json:"timestamp"`
+			ID       json.RawMessage `json:"id"`
+			Type     string          `json:"type"`
+			Detail   string          `json:"detail"`
+			FromUser string          `json:"from_user"`
+			Timestamp int64          `json:"timestamp"`
+			Mode     string          `json:"mode"`
 		}
 		if err := json.Unmarshal(m.Value, &raw); err != nil {
 			log.Printf("kafka message json error partition=%d offset=%d: %v", m.Partition, m.Offset, err)
@@ -94,24 +98,23 @@ func Run(ctx context.Context, brokers []string, topic, groupID string, defaultUs
 			if err != nil {
 				log.Printf("kafka message id partition=%d offset=%d: %v", m.Partition, m.Offset, err)
 			} else {
+				keyID := string(m.Key)
 				ev := NotificationEvent{
-					ID:        id,
-					Type:      raw.Type,
-					Detail:    raw.Detail,
-					Timestamp: raw.Timestamp,
-					FromUser:  string(m.Key),
+					ID:          id,
+					Type:        raw.Type,
+					Detail:      raw.Detail,
+					Timestamp:   raw.Timestamp,
+					FromUser:    raw.FromUser,
+					RecipientID: keyID,
+					Mode:        raw.Mode,
 				}
 				log.Printf(
-					"kafka message partition=%d offset=%d key=%q id=%d type=%q detail=%q ts_ms=%d",
-					m.Partition, m.Offset, string(m.Key), ev.ID, ev.Type, ev.Detail, ev.Timestamp,
+					"kafka message partition=%d offset=%d key=%q mode=%q id=%d type=%q from=%q",
+					m.Partition, m.Offset, keyID, ev.Mode, ev.ID, ev.Type, ev.FromUser,
 				)
 
-				userID := string(m.Key)
-				if userID == "" {
-					userID = defaultUserID
-				}
-				if err := n.Publish(ctx, userID, ev); err != nil {
-					log.Printf("redis publish userID=%q: %v", userID, err)
+				if err := n.Publish(ctx, keyID, ev); err != nil {
+					log.Printf("publish keyID=%q: %v", keyID, err)
 				}
 			}
 		}

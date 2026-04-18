@@ -27,35 +27,6 @@ services:
       retries: 5
       start_period: 10s
 
-  gateway:
-    build:
-      context: .
-      dockerfile: gateway/Dockerfile
-    ports:
-      - "8080:8080"
-    environment:
-      REDIS_ADDR: redis:6379
-      TASK_ID: docker-gateway
-      DB_DSN: postgres://notif:notif@postgres:5432/notifications?sslmode=disable
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-
-  ingestion:
-    build:
-      context: .
-      dockerfile: ingestion/Dockerfile
-    ports:
-      - "3000:3000"
-    environment:
-      - KAFKA_BROKERS=kafka:29092
-      - KAFKA_TOPIC=worker-events
-    depends_on:
-      kafka:
-        condition: service_healthy
-
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.1
     environment:
@@ -109,14 +80,9 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     healthcheck:
-      test:
-        [
-          "CMD",
-          "kafka-broker-api-versions",
-          "--bootstrap-server",
-          "localhost:29092",
-        ]
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:29092"]
       interval: 10s
       timeout: 10s
       retries: 6
@@ -140,6 +106,24 @@ services:
           --partitions "$${KAFKA_TOPIC_PARTITIONS}" \
           --replication-factor 1
 
+  ingestion:
+    build:
+      context: .
+      dockerfile: ingestion/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_TOPIC: worker-events
+      DB_DSN: postgres://notif:notif@postgres:5432/notifications?sslmode=disable
+      NOTIFICATION_MODE: FAN_OUT_HYBRID
+      FANOUT_THRESHOLD: "1000"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
   worker:
     build:
       context: .
@@ -153,7 +137,6 @@ services:
       GIN_MODE: release
       REDIS_ADDR: redis:6379
       DB_DSN: postgres://notif:notif@postgres:5432/notifications?sslmode=disable
-      FANOUT_THRESHOLD: "1000"
       NOTIFY_DEFAULT_USER_ID: default
       NOTIFY_FROM_USER: alice
       NOTIFY_MESSAGE: Alice posted a photo
@@ -169,6 +152,39 @@ services:
     deploy:
       replicas: 3
 
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_ADDR: redis:6379
+      TASK_ID: local
+      DB_DSN: postgres://notif:notif@postgres:5432/notifications?sslmode=disable
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  readapi:
+    build:
+      context: .
+      dockerfile: readapi/Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      REDIS_ADDR: redis:6379
+      HTTP_ADDR: ":8082"
+      GIN_MODE: release
+      DATABASE_URL: postgres://notif:notif@postgres:5432/notifications
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
   redis-subscriber:
     profiles:
       - test-fanout
@@ -181,3 +197,24 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+
+  kafka-producer:
+    profiles:
+      - test-fanout
+    build:
+      context: .
+      dockerfile: ./fanout/Dockerfile
+      target: kafka-producer
+    environment:
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_TOPIC: worker-events
+      HTTP_ADDR: ":8081"
+      GIN_MODE: release
+      LOAD_PEAK_MSG_PER_SEC: "20"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    ports:
+      - "8081:8081"
