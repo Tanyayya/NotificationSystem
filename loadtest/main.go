@@ -19,14 +19,16 @@ func main() {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
-	tracker := NewTracker(cfg.FollowerCount, cfg.EventTimeout)
-	pool := NewSubscriberPool(cfg.ALBURL, cfg.FollowerStart, cfg.FollowerCount, tracker)
+	pool := NewSubscriberPool(cfg.ALBURL, cfg.FollowerPrefix, cfg.FollowerStart, cfg.FollowerCount, nil)
 
 	metrics, err := NewMetrics(cfg.CSVOut, pool)
 	if err != nil {
 		log.Fatalf("metrics init: %v", err)
 	}
 	defer metrics.Close()
+
+	tracker := NewTracker(pool, metrics)
+	pool.tracker = tracker
 
 	go metrics.ServeHTTP(cfg.MetricsPort)
 
@@ -71,8 +73,27 @@ func main() {
 		cancel()
 	}
 
-	// Give in-flight events time to complete or time out before printing results.
-	time.Sleep(cfg.EventTimeout)
+	// Wait for in-flight events to drain. Each event self-resolves within the
+	// 2-second per-subscriber timeout, so this should complete quickly.
+	// cfg.EventTimeout is a safety-net outer deadline.
+	deadline := time.After(cfg.EventTimeout)
+	poll := time.NewTicker(500 * time.Millisecond)
+	defer poll.Stop()
+wait:
+	for {
+		select {
+		case <-poll.C:
+			if n := metrics.InFlight(); n == 0 {
+				log.Println("all in-flight events resolved")
+				break wait
+			} else {
+				log.Printf("waiting for %d in-flight events...", n)
+			}
+		case <-deadline:
+			log.Printf("event timeout elapsed, %d events still in-flight", metrics.InFlight())
+			break wait
+		}
+	}
 
 	metrics.PrintSummary()
 	log.Printf("results written to %s", cfg.CSVOut)

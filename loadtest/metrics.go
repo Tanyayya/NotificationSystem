@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Metrics handles CSV writing and the live HTTP metrics endpoint.
@@ -36,9 +37,7 @@ func NewMetrics(csvPath string, pool *SubscriberPool) (*Metrics, error) {
 	}
 	w := csv.NewWriter(f)
 	if err := w.Write([]string{
-		"event_id", "sent_at_unix_ms", "last_received_unix_ms",
-		"max_latency_ms", "p50_ms", "p95_ms", "p99_ms",
-		"subscribers_received", "subscribers_total", "complete",
+		"record_type", "event_id", "sent_at_unix_ms", "user_id", "received_at_unix_ms", "latency_ms",
 	}); err != nil {
 		f.Close()
 		return nil, err
@@ -47,10 +46,58 @@ func NewMetrics(csvPath string, pool *SubscriberPool) (*Metrics, error) {
 	return &Metrics{csvWriter: w, csvFile: f, pool: pool}, nil
 }
 
-func (m *Metrics) IncEventsSent() { m.eventsSent.Add(1) }
-func (m *Metrics) IncInFlight()   { m.eventsInFlight.Add(1) }
+func (m *Metrics) IncInFlight()      { m.eventsInFlight.Add(1) }
+func (m *Metrics) InFlight() int64  { return m.eventsInFlight.Load() }
 
-// RecordResult writes a row to the CSV and updates rolling latency state.
+// RecordEventSent writes a "sent" row to the CSV and increments the sent counter.
+func (m *Metrics) RecordEventSent(eventID int64, sentAt time.Time) {
+	m.eventsSent.Add(1)
+	m.mu.Lock()
+	m.csvWriter.Write([]string{
+		"sent",
+		strconv.FormatInt(eventID, 10),
+		strconv.FormatInt(sentAt.UnixMilli(), 10),
+		"", "", "",
+	})
+	m.csvWriter.Flush()
+	m.mu.Unlock()
+}
+
+// RecordNotificationReceived writes a "received" row to the CSV and updates rolling latency state.
+func (m *Metrics) RecordNotificationReceived(eventID int64, userID string, sentAt time.Time, receivedAt time.Time) {
+	latencyMS := receivedAt.Sub(sentAt).Milliseconds()
+	m.notificationsReceived.Add(1)
+	m.mu.Lock()
+	m.latencies = append(m.latencies, latencyMS)
+	m.csvWriter.Write([]string{
+		"received",
+		strconv.FormatInt(eventID, 10),
+		strconv.FormatInt(sentAt.UnixMilli(), 10),
+		userID,
+		strconv.FormatInt(receivedAt.UnixMilli(), 10),
+		strconv.FormatInt(latencyMS, 10),
+	})
+	m.csvWriter.Flush()
+	m.mu.Unlock()
+}
+
+// RecordNotDelivered writes a "not_delivered" row to the CSV for a subscriber that
+// was still connected but did not receive the notification within the 2-second window.
+func (m *Metrics) RecordNotDelivered(eventID int64, userID string, sentAt time.Time) {
+	m.mu.Lock()
+	m.csvWriter.Write([]string{
+		"not_delivered",
+		strconv.FormatInt(eventID, 10),
+		strconv.FormatInt(sentAt.UnixMilli(), 10),
+		userID,
+		"",
+		"",
+	})
+	m.csvWriter.Flush()
+	m.mu.Unlock()
+}
+
+// RecordResult updates event completion counters.
 func (m *Metrics) RecordResult(r eventResult) {
 	if r.complete {
 		m.eventsComplete.Add(1)
@@ -58,25 +105,6 @@ func (m *Metrics) RecordResult(r eventResult) {
 		m.eventsPartial.Add(1)
 	}
 	m.eventsInFlight.Add(-1)
-	m.notificationsReceived.Add(int64(r.subscribersReceived))
-
-	m.mu.Lock()
-	m.latencies = append(m.latencies, r.maxLatencyMS)
-	m.mu.Unlock()
-
-	m.csvWriter.Write([]string{
-		strconv.FormatInt(r.eventID, 10),
-		strconv.FormatInt(r.sentAtMS, 10),
-		strconv.FormatInt(r.lastReceivedMS, 10),
-		strconv.FormatInt(r.maxLatencyMS, 10),
-		strconv.FormatInt(r.p50MS, 10),
-		strconv.FormatInt(r.p95MS, 10),
-		strconv.FormatInt(r.p99MS, 10),
-		strconv.Itoa(r.subscribersReceived),
-		strconv.Itoa(r.subscribersTotal),
-		strconv.FormatBool(r.complete),
-	})
-	m.csvWriter.Flush()
 }
 
 func (m *Metrics) snapshot() map[string]any {

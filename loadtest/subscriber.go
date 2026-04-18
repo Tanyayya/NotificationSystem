@@ -21,20 +21,23 @@ type wsNotification struct {
 
 // SubscriberPool manages N persistent WebSocket connections, one per follower user.
 type SubscriberPool struct {
-	albURL        string
-	followerStart int
-	followerCount int
-	tracker       *Tracker
-	activeConns   atomic.Int64
-	wg            sync.WaitGroup
+	albURL         string
+	followerPrefix string
+	followerStart  int
+	followerCount  int
+	tracker        *Tracker
+	activeConns    atomic.Int64
+	connectedUsers sync.Map // map[string]struct{} — currently open connections
+	wg             sync.WaitGroup
 }
 
-func NewSubscriberPool(albURL string, followerStart, followerCount int, tracker *Tracker) *SubscriberPool {
+func NewSubscriberPool(albURL, followerPrefix string, followerStart, followerCount int, tracker *Tracker) *SubscriberPool {
 	return &SubscriberPool{
-		albURL:        albURL,
-		followerStart: followerStart,
-		followerCount: followerCount,
-		tracker:       tracker,
+		albURL:         albURL,
+		followerPrefix: followerPrefix,
+		followerStart:  followerStart,
+		followerCount:  followerCount,
+		tracker:        tracker, // may be set after construction
 	}
 }
 
@@ -45,7 +48,7 @@ func (p *SubscriberPool) Start(ctx context.Context, ready chan<- struct{}) {
 	total := int64(p.followerCount)
 
 	for i := 0; i < p.followerCount; i++ {
-		userID := fmt.Sprintf("%d", p.followerStart+i)
+		userID := fmt.Sprintf("%s%d", p.followerPrefix, p.followerStart+i)
 		p.wg.Add(1)
 		go func(uid string) {
 			defer p.wg.Done()
@@ -90,6 +93,8 @@ func (p *SubscriberPool) connectLoop(ctx context.Context, userID string, onFirst
 		}
 
 		p.activeConns.Add(1)
+		p.connectedUsers.Store(userID, struct{}{})
+		log.Printf("subscriber %s: connected", userID)
 		backoff = 500 * time.Millisecond
 
 		if first {
@@ -100,6 +105,7 @@ func (p *SubscriberPool) connectLoop(ctx context.Context, userID string, onFirst
 		p.readLoop(ctx, conn, userID)
 
 		conn.Close()
+		p.connectedUsers.Delete(userID)
 		p.activeConns.Add(-1)
 
 		if ctx.Err() != nil {
@@ -167,6 +173,22 @@ func (p *SubscriberPool) readLoop(ctx context.Context, conn *websocket.Conn, use
 
 func (p *SubscriberPool) ActiveConns() int64 {
 	return p.activeConns.Load()
+}
+
+// IsConnected reports whether userID currently has an open WebSocket connection.
+func (p *SubscriberPool) IsConnected(userID string) bool {
+	_, ok := p.connectedUsers.Load(userID)
+	return ok
+}
+
+// ConnectedIDs returns a snapshot of all currently-connected user IDs.
+func (p *SubscriberPool) ConnectedIDs() map[string]struct{} {
+	result := make(map[string]struct{})
+	p.connectedUsers.Range(func(k, _ any) bool {
+		result[k.(string)] = struct{}{}
+		return true
+	})
+	return result
 }
 
 func (p *SubscriberPool) Wait() {

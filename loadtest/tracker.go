@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const perSubscriberTimeout = 15 * time.Second
+
 // report is sent by a subscriber goroutine when it receives a notification.
 type report struct {
 	eventID int64
@@ -28,45 +30,70 @@ type eventResult struct {
 	complete            bool
 }
 
+// subState tracks the delivery status for a single (event, subscriber) pair.
+type subState struct {
+	timer      *time.Timer
+	received   bool
+	timedOut   bool
+	skipped    bool
+	receivedAt time.Time
+}
+
 type inflightEvent struct {
-	eventID       int64
-	sentAt        time.Time
-	mu            sync.Mutex
-	received      map[string]time.Time
-	totalExpected int
-	timer         *time.Timer
+	eventID  int64
+	sentAt   time.Time
+	mu       sync.Mutex
+	subs     map[string]*subState
+	resolved int
+	total    int
 }
 
 // Tracker matches subscriber delivery reports to sent events and computes latency.
 type Tracker struct {
-	events        sync.Map
-	Reports       chan report
-	Results       chan eventResult
-	totalExpected int
-	eventTimeout  time.Duration
+	events  sync.Map
+	Reports chan report
+	Results chan eventResult
+	pool    *SubscriberPool
+	metrics *Metrics
 }
 
-func NewTracker(totalExpected int, eventTimeout time.Duration) *Tracker {
+func NewTracker(pool *SubscriberPool, metrics *Metrics) *Tracker {
 	return &Tracker{
-		Reports:       make(chan report, totalExpected*4),
-		Results:       make(chan eventResult, 256),
-		totalExpected: totalExpected,
-		eventTimeout:  eventTimeout,
+		Reports: make(chan report, pool.followerCount*4),
+		Results: make(chan eventResult, 256),
+		pool:    pool,
+		metrics: metrics,
 	}
 }
 
 // Register records a new in-flight event. Call immediately after POST /event returns.
+// It snapshots the currently-connected subscribers and starts a 2-second per-subscriber timer.
 func (t *Tracker) Register(eventID int64, sentAt time.Time) {
+	connectedIDs := t.pool.ConnectedIDs()
 	ev := &inflightEvent{
-		eventID:       eventID,
-		sentAt:        sentAt,
-		received:      make(map[string]time.Time, t.totalExpected),
-		totalExpected: t.totalExpected,
+		eventID: eventID,
+		sentAt:  sentAt,
+		subs:    make(map[string]*subState, len(connectedIDs)),
+		total:   len(connectedIDs),
 	}
+
+	// Lock before storing so any concurrent handleReport blocks until all subs are initialised.
+	ev.mu.Lock()
 	t.events.Store(eventID, ev)
-	ev.timer = time.AfterFunc(t.eventTimeout, func() {
-		t.finalize(eventID, false)
-	})
+
+	for userID := range connectedIDs {
+		uid := userID // capture for closure
+		sub := &subState{}
+		ev.subs[uid] = sub
+		sub.timer = time.AfterFunc(perSubscriberTimeout, func() {
+			t.handleTimeout(eventID, uid)
+		})
+	}
+	ev.mu.Unlock()
+
+	if ev.total == 0 {
+		t.finalize(eventID)
+	}
 }
 
 // Run drains the Reports channel and processes delivery confirmations.
@@ -90,21 +117,67 @@ func (t *Tracker) handleReport(r report) {
 	ev := val.(*inflightEvent)
 
 	ev.mu.Lock()
-	if _, already := ev.received[r.userID]; !already {
-		ev.received[r.userID] = r.at
+	sub, ok := ev.subs[r.userID]
+	if !ok || sub.received || sub.timedOut || sub.skipped {
+		ev.mu.Unlock()
+		return
 	}
-	complete := len(ev.received) >= ev.totalExpected
+	sub.timer.Stop()
+	sub.received = true
+	sub.receivedAt = r.at
+	ev.resolved++
+	complete := ev.resolved >= ev.total
 	ev.mu.Unlock()
 
+	t.metrics.RecordNotificationReceived(r.eventID, r.userID, ev.sentAt, r.at)
+
 	if complete {
-		ev.timer.Stop()
-		t.finalize(r.eventID, true)
+		t.finalize(r.eventID)
+	}
+}
+
+// handleTimeout fires when a subscriber's 2-second window elapses without delivery.
+// If the subscriber is still connected it is recorded as not_delivered; if it has
+// disconnected it is silently skipped.
+func (t *Tracker) handleTimeout(eventID int64, userID string) {
+	val, ok := t.events.Load(eventID)
+	if !ok {
+		return
+	}
+	ev := val.(*inflightEvent)
+
+	ev.mu.Lock()
+	sub := ev.subs[userID]
+	if sub.received || sub.timedOut || sub.skipped {
+		ev.mu.Unlock()
+		return
+	}
+
+	sentAt := ev.sentAt
+	if t.pool.IsConnected(userID) {
+		sub.timedOut = true
+		ev.resolved++
+		complete := ev.resolved >= ev.total
+		ev.mu.Unlock()
+		t.metrics.RecordNotDelivered(eventID, userID, sentAt)
+		if complete {
+			t.finalize(eventID)
+		}
+	} else {
+		// Subscriber disconnected — skip without recording not_delivered.
+		sub.skipped = true
+		ev.resolved++
+		complete := ev.resolved >= ev.total
+		ev.mu.Unlock()
+		if complete {
+			t.finalize(eventID)
+		}
 	}
 }
 
 // finalize is safe to call from multiple goroutines; sync.Map.LoadAndDelete ensures
 // only the first call proceeds.
-func (t *Tracker) finalize(eventID int64, complete bool) {
+func (t *Tracker) finalize(eventID int64) {
 	val, loaded := t.events.LoadAndDelete(eventID)
 	if !loaded {
 		return
@@ -114,13 +187,21 @@ func (t *Tracker) finalize(eventID int64, complete bool) {
 	ev.mu.Lock()
 	defer ev.mu.Unlock()
 
-	latencies := make([]int64, 0, len(ev.received))
+	var latencies []int64
 	var lastReceived time.Time
-	for _, at := range ev.received {
-		d := at.Sub(ev.sentAt).Milliseconds()
-		latencies = append(latencies, d)
-		if at.After(lastReceived) {
-			lastReceived = at
+	allReceived := true
+	receivedCount := 0
+
+	for _, sub := range ev.subs {
+		if sub.received {
+			d := sub.receivedAt.Sub(ev.sentAt).Milliseconds()
+			latencies = append(latencies, d)
+			if sub.receivedAt.After(lastReceived) {
+				lastReceived = sub.receivedAt
+			}
+			receivedCount++
+		} else {
+			allReceived = false
 		}
 	}
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
@@ -128,9 +209,9 @@ func (t *Tracker) finalize(eventID int64, complete bool) {
 	result := eventResult{
 		eventID:             eventID,
 		sentAtMS:            ev.sentAt.UnixMilli(),
-		subscribersReceived: len(ev.received),
-		subscribersTotal:    ev.totalExpected,
-		complete:            complete,
+		subscribersReceived: receivedCount,
+		subscribersTotal:    ev.total,
+		complete:            allReceived,
 	}
 	if !lastReceived.IsZero() {
 		result.lastReceivedMS = lastReceived.UnixMilli()

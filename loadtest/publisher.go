@@ -94,7 +94,7 @@ func (p *Publisher) postEvent(ctx context.Context) {
 	// t1 is recorded after the 200 OK — the event is confirmed in Kafka at this point.
 	t1 := time.Now()
 	p.tracker.Register(evResp.EventID, t1)
-	p.metrics.IncEventsSent()
+	p.metrics.RecordEventSent(evResp.EventID, t1)
 	p.metrics.IncInFlight()
 
 	log.Printf("publisher: event_id=%d registered", evResp.EventID)
