@@ -32,6 +32,12 @@ func NewService(db *sql.DB) *Service {
 	return &Service{db: db}
 }
 
+// MarkDelivered marks a single notification as delivered for recipientID.
+// Called by the gateway after queuing a real-time notification onto writeCh.
+func (s *Service) MarkDelivered(ctx context.Context, recipientID string, id int64) error {
+	return markDelivered(ctx, s.db, recipientID, []int64{id})
+}
+
 // GetHistory returns the most recent notifications for recipientID.
 //
 // beforeID is a pagination cursor — pass 0 to start from the latest notification,

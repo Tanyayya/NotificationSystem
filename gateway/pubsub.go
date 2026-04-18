@@ -94,6 +94,12 @@ func subscribeNotifications(ctx context.Context, userID string, writeCh chan<- [
 			// the subscriber — we just drop the message and log it instead.
 			select {
 			case writeCh <- wrapped:
+				// Mark delivered optimistically now that the message is queued.
+				if historySvc != nil {
+					if err := historySvc.MarkDelivered(ctx, userID, raw.ID); err != nil {
+						log.Printf("mark delivered error user=%s id=%d: %v", userID, raw.ID, err)
+					}
+				}
 			default:
 				log.Printf("writeCh full for user %s, dropping message", userID)
 			}
