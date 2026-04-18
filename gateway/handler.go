@@ -7,9 +7,15 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/Tanyayya/NotificationSystem/gateway/internal/history"
 	"github.com/gorilla/websocket"
+)
+
+const (
+	pingInterval = 30 * time.Second // must be well under ALB idle timeout (60s)
+	pongDeadline = 60 * time.Second // if no pong within this window, treat client as dead
 )
 
 // upgrader upgrades a regular HTTP connection to a WebSocket connection.
@@ -83,6 +89,15 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 		log.Printf("upgrade error for user %s: %v", userID, err)
 		return
 	}
+
+	// Set initial read deadline. The pong handler below resets it on every pong.
+	// If no pong arrives within pongDeadline, ReadMessage returns an error and
+	// the reader goroutine tears down the connection cleanly.
+	ws.SetReadDeadline(time.Now().Add(pongDeadline))
+	ws.SetPongHandler(func(string) error {
+		ws.SetReadDeadline(time.Now().Add(pongDeadline))
+		return nil
+	})
 
 	// ctx is tied to this specific connection's lifetime.
 	// When cancel() is called (by reader or writer on error/disconnect),
@@ -167,9 +182,14 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 // writer drains writeCh and sends each message to the WebSocket client.
 // This is the single writer goroutine — no other goroutine should ever
 // call ws.WriteMessage directly.
-// Exits when ctx is cancelled or writeCh is closed.
+// It also owns the ping ticker: every pingInterval it sends a WebSocket
+// PING frame. The client (browser) automatically replies with a PONG,
+// which resets the read deadline in the pong handler registered in HandleWS.
+// Exits when ctx is cancelled, writeCh is closed, or a write error occurs.
 func (c *conn) writer(ctx context.Context) {
 	defer c.ws.Close()
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -183,6 +203,12 @@ func (c *conn) writer(ctx context.Context) {
 			if err := c.ws.WriteMessage(websocket.TextMessage, msg); err != nil {
 				log.Printf("write error for user %s: %v", c.userID, err)
 				c.cancel() // signal reader and other goroutines to shut down too
+				return
+			}
+		case <-ticker.C:
+			if err := c.ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Printf("ping error for user %s: %v", c.userID, err)
+				c.cancel()
 				return
 			}
 		}
