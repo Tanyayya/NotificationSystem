@@ -9,6 +9,9 @@ import (
 	"github.com/Tanyayya/NotificationSystem/fanout/internal/notif"
 )
 
+// fanoutWriteBatchSize is the number of followers per Postgres batch insert and Redis pipeline.
+const fanoutWriteBatchSize = 200
+
 // Mode controls which fan-out strategy the worker uses.
 type Mode string
 
@@ -78,30 +81,40 @@ func (f *FanOuter) Publish(ctx context.Context, fromUser string, ev consumer.Not
 }
 
 // fanoutOnWrite is the write path — used for normal users under the threshold.
-// For each follower:
-//   - writes a notification record to PostgreSQL (delivered=false)
-//   - publishes to notif:{followerID} on Redis Pub/Sub
+// Followers are processed in chunks of fanoutWriteBatchSize: batch insert to PostgreSQL,
+// then pipelined Redis PUBLISH to notif:{followerID}. If batch insert fails, falls back
+// to per-follower insert + publish for that chunk.
 //
-// Redis publish errors are logged but do not stop the loop —
-// the notification is already persisted and will be replayed on reconnect.
+// Redis publish errors are logged but do not stop processing —
+// notifications are already persisted and will be replayed on reconnect.
 func (f *FanOuter) fanoutOnWrite(ctx context.Context, followers []string, ev consumer.NotificationEvent) error {
 	log.Printf("fanout-on-write: event id=%d type=%q from=%q recipients=%d",
 		ev.ID, ev.Type, ev.FromUser, len(followers))
 
 	var publishErrors int
-	for _, followerID := range followers {
-		// persist to PostgreSQL — ensures offline users get it on reconnect
-		if err := f.db.InsertNotification(ctx, followerID, ev); err != nil {
-			log.Printf("fanout-on-write: insert notification follower=%q: %v", followerID, err)
+	for i := 0; i < len(followers); i += fanoutWriteBatchSize {
+		end := i + fanoutWriteBatchSize
+		if end > len(followers) {
+			end = len(followers)
+		}
+		chunk := followers[i:end]
+
+		if err := f.db.InsertNotificationsBatch(ctx, chunk, ev); err != nil {
+			log.Printf("fanout-on-write: batch insert failed (n=%d), falling back to row-by-row: %v", len(chunk), err)
+			publishErrors += f.fanoutOnWriteRowByRow(ctx, chunk, ev)
 			continue
 		}
 
-		// publish to Redis Pub/Sub — delivers to online users instantly
-		if err := f.publisher.Publish(ctx, followerID, ev); err != nil {
-			log.Printf("fanout-on-write: redis publish follower=%q: %v", followerID, err)
-			publishErrors++
-			// don't return — notification is persisted, continue to next follower
+		n, err := f.publisher.PublishPipeline(ctx, chunk, ev)
+		if err != nil {
+			log.Printf("fanout-on-write: redis pipeline marshal chunk n=%d: %v", len(chunk), err)
+			publishErrors += len(chunk)
+			continue
 		}
+		if n > 0 {
+			log.Printf("fanout-on-write: redis pipeline chunk n=%d had %d publish errors", len(chunk), n)
+		}
+		publishErrors += n
 	}
 
 	if publishErrors > 0 {
@@ -111,6 +124,22 @@ func (f *FanOuter) fanoutOnWrite(ctx context.Context, followers []string, ev con
 	log.Printf("fanout-on-write: done event id=%d recipients=%d errors=%d",
 		ev.ID, len(followers), publishErrors)
 	return nil
+}
+
+// fanoutOnWriteRowByRow is the per-follower insert + publish path used as a fallback when batch insert fails.
+func (f *FanOuter) fanoutOnWriteRowByRow(ctx context.Context, followers []string, ev consumer.NotificationEvent) int {
+	var publishErrors int
+	for _, followerID := range followers {
+		if err := f.db.InsertNotification(ctx, followerID, ev); err != nil {
+			log.Printf("fanout-on-write: insert notification follower=%q: %v", followerID, err)
+			continue
+		}
+		if err := f.publisher.Publish(ctx, followerID, ev); err != nil {
+			log.Printf("fanout-on-write: redis publish follower=%q: %v", followerID, err)
+			publishErrors++
+		}
+	}
+	return publishErrors
 }
 
 // fanoutOnRead is the read path — used for high-follower accounts above the threshold.

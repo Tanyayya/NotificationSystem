@@ -58,7 +58,7 @@ aws_session_token = ...
 cd infra
 terraform init
 terraform plan
-terraform apply   # MSK takes 15-25 min — let it run
+terraform apply -auto-approve   # MSK takes 15-25 min — let it run
 ```
 
 Note the outputs after apply — you will need them:
