@@ -26,8 +26,9 @@ type SubscriberPool struct {
 	followerStart  int
 	followerCount  int
 	tracker        *Tracker
+	metrics        *Metrics // set before Start (same as tracker)
 	activeConns    atomic.Int64
-	connectedUsers sync.Map // map[string]struct{} — currently open connections
+	connectedUsers sync.Map // map[string]struct{} — subscribers past dial + history (or first app JSON)
 	wg             sync.WaitGroup
 }
 
