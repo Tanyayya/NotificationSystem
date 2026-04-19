@@ -9,9 +9,6 @@ type Producer struct {
 	topic string
 }
 
-// NewProducer creates a sync producer for the given bootstrap brokers and topic.
-// Brokers must match the listener clients use (e.g. kafka:29092 on Docker Compose
-// for the PLAINTEXT listener; localhost:9092 from the host for PLAINTEXT_HOST).
 func NewProducer(brokers []string, topic string) (*Producer, error) {
 	cfg := sarama.NewConfig()
 	cfg.Producer.Return.Successes = true

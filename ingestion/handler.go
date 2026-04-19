@@ -58,6 +58,7 @@ func (h *Handler) HandleEvent(w http.ResponseWriter, r *http.Request) {
 		Timestamp: time.Now().UnixMilli(),
 	}
 
+
 	payload, err := json.Marshal(event)
 	if err != nil {
 		log.Printf("marshal error: %v", err)
