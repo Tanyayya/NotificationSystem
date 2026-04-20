@@ -2,22 +2,34 @@ package fanout
 
 import (
 	"context"
-	"log"
 	"fmt"
+	"log"
 
 	"github.com/Tanyayya/NotificationSystem/fanout/internal/consumer"
 	"github.com/Tanyayya/NotificationSystem/fanout/internal/db"
 	"github.com/Tanyayya/NotificationSystem/fanout/internal/notif"
 )
 
+// fanoutWriteBatchSize is the number of followers per Postgres batch insert and Redis pipeline.
+const fanoutWriteBatchSize = 200
+
+// Mode controls which fan-out strategy the worker uses.
+type Mode string
+
+const (
+	ModeRead   Mode = "FAN_OUT_READ"
+	ModeWrite  Mode = "FAN_OUT_WRITE"
+	ModeHybrid Mode = "FAN_OUT_HYBRID"
+)
+
 // FanOuter sits between the Kafka consumer and the Redis publisher.
 // It implements consumer.Notifier so it can be passed directly to consumer.Run.
 //
 // For each event it:
-//   1. Looks up the follower list from PostgreSQL
-//   2. Chooses fan-out on write or fan-out on read based on follower count
-//   3. Fan-out on write: persists one notification per follower + publishes to Redis
-//   4. Fan-out on read:  persists one event record (stub — read path not yet implemented)
+//  1. Looks up the follower list from PostgreSQL
+//  2. Chooses fan-out on write or fan-out on read based on follower count
+//  3. Fan-out on write: persists one notification per follower + publishes to Redis
+//  4. Fan-out on read:  persists one event record (stub — read path not yet implemented)
 type FanOuter struct {
 	db        *db.DB
 	publisher *notif.Publisher
@@ -58,43 +70,69 @@ func (f *FanOuter) Publish(ctx context.Context, fromUser string, ev consumer.Not
 }
 
 // fanoutOnWrite is the write path — used for normal users under the threshold.
-// For each follower:
-//   - writes a notification record to PostgreSQL (delivered=false)
-//   - publishes to notif:{followerID} on Redis Pub/Sub
+// Followers are processed in chunks of fanoutWriteBatchSize: batch insert to PostgreSQL,
+// then pipelined Redis PUBLISH to notif:{followerID}. If batch insert fails, falls back
+// to per-follower insert + publish for that chunk.
 //
 // If ANY PostgreSQL insert fails, the function returns an error so the
 // Kafka offset is not committed and the message is retried.
-// Redis publish errors are logged but do not trigger a retry —
-// the notification is already persisted and will be replayed on reconnect.
+// Redis publish errors are logged but do not stop processing —
+// notifications are already persisted and will be replayed on reconnect.
 func (f *FanOuter) fanoutOnWrite(ctx context.Context, followers []string, ev consumer.NotificationEvent) error {
 	log.Printf("fanout-on-write: event id=%d type=%q from=%q recipients=%d",
 		ev.ID, ev.Type, ev.FromUser, len(followers))
 
-	var insertErrors int
-	for _, followerID := range followers {
-		// persist to PostgreSQL — if this fails we must not commit the Kafka offset
-		if err := f.db.InsertNotification(ctx, followerID, ev); err != nil {
-			log.Printf("fanout-on-write: insert notification follower=%q: %v", followerID, err)
-			insertErrors++
-			continue // skip Redis publish for this follower — no point publishing if not persisted
+	var publishErrors int
+	for i := 0; i < len(followers); i += fanoutWriteBatchSize {
+		end := i + fanoutWriteBatchSize
+		if end > len(followers) {
+			end = len(followers)
+		}
+		chunk := followers[i:end]
+
+		if err := f.db.InsertNotificationsBatch(ctx, chunk, ev); err != nil {
+			log.Printf("fanout-on-write: batch insert failed (n=%d), falling back to row-by-row: %v", len(chunk), err)
+			publishErrors += f.fanoutOnWriteRowByRow(ctx, chunk, ev)
+			continue
 		}
 
-		// publish to Redis Pub/Sub — delivers to online users instantly
-		// Redis errors are non-fatal since notification is already persisted
-		if err := f.publisher.Publish(ctx, followerID, ev); err != nil {
-			log.Printf("fanout-on-write: redis publish follower=%q: %v", followerID, err)
+		n, err := f.publisher.PublishPipeline(ctx, chunk, ev)
+		if err != nil {
+			log.Printf("fanout-on-write: redis pipeline marshal chunk n=%d: %v", len(chunk), err)
+			publishErrors += len(chunk)
+			continue
 		}
+		if n > 0 {
+			log.Printf("fanout-on-write: redis pipeline chunk n=%d had %d publish errors", len(chunk), n)
+		}
+		publishErrors += n
 	}
 
-	// if any inserts failed, return an error so kafka-consumer.go skips CommitMessages
+	// if any recipients failed, return an error so kafka-consumer.go skips CommitMessages
 	// Kafka will redeliver the message and we retry — ON CONFLICT DO NOTHING handles duplicates
-	if insertErrors > 0 {
-		return fmt.Errorf("fanout-on-write: %d/%d inserts failed, skipping kafka commit for retry",
-			insertErrors, len(followers))
+	if publishErrors > 0 {
+		return fmt.Errorf("fanout-on-write: %d/%d recipients failed, skipping kafka commit for retry",
+			publishErrors, len(followers))
 	}
 
 	log.Printf("fanout-on-write: done event id=%d recipients=%d", ev.ID, len(followers))
 	return nil
+}
+
+// fanoutOnWriteRowByRow is the per-follower insert + publish fallback used when batch insert fails.
+func (f *FanOuter) fanoutOnWriteRowByRow(ctx context.Context, followers []string, ev consumer.NotificationEvent) int {
+	var publishErrors int
+	for _, followerID := range followers {
+		if err := f.db.InsertNotification(ctx, followerID, ev); err != nil {
+			log.Printf("fanout-on-write: insert notification follower=%q: %v", followerID, err)
+			continue
+		}
+		if err := f.publisher.Publish(ctx, followerID, ev); err != nil {
+			log.Printf("fanout-on-write: redis publish follower=%q: %v", followerID, err)
+			publishErrors++
+		}
+	}
+	return publishErrors
 }
 
 // fanoutOnRead is the read path — used for high-follower accounts above the threshold.

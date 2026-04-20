@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq" // PostgreSQL driver
@@ -79,6 +80,32 @@ func (d *DB) InsertNotification(ctx context.Context, recipientID string, ev cons
 	)
 	if err != nil {
 		return fmt.Errorf("insert notification recipient=%s: %w", recipientID, err)
+	}
+	return nil
+}
+
+// InsertNotificationsBatch inserts one notification row per recipient in a single statement.
+// recipientIDs must be non-empty; callers chunk to stay within Postgres parameter limits.
+func (d *DB) InsertNotificationsBatch(ctx context.Context, recipientIDs []string, ev consumer.NotificationEvent) error {
+	if len(recipientIDs) == 0 {
+		return nil
+	}
+	createdAt := time.UnixMilli(ev.ID >> 22)
+	var b strings.Builder
+	b.WriteString(`INSERT INTO notifications (id, recipient_id, from_user, type, message, delivered, created_at) VALUES `)
+	args := make([]interface{}, 0, len(recipientIDs)*6)
+	for i, recipientID := range recipientIDs {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		base := i*6 + 1
+		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, false, $%d)", base, base+1, base+2, base+3, base+4, base+5)
+		args = append(args, ev.ID, recipientID, ev.FromUser, ev.Type, ev.Detail, createdAt)
+	}
+	b.WriteString(` ON CONFLICT (id, recipient_id) DO NOTHING`)
+	_, err := d.pool.ExecContext(ctx, b.String(), args...)
+	if err != nil {
+		return fmt.Errorf("insert notifications batch n=%d: %w", len(recipientIDs), err)
 	}
 	return nil
 }

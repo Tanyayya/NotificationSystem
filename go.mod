@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/IBM/sarama v1.47.0
+	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/aws/aws-sdk-go-v2 v1.41.6
 	github.com/aws/aws-sdk-go-v2/config v1.32.16
 	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.56.2
@@ -66,6 +67,7 @@ require (
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.12 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/arch v0.8.0 // indirect
 	golang.org/x/crypto v0.48.0 // indirect

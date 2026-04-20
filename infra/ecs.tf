@@ -179,7 +179,8 @@ resource "aws_ecs_task_definition" "fanout" {
         { name = "KAFKA_GROUP_ID", value = "worker-skeleton" },
         { name = "REDIS_ADDR", value = "${aws_elasticache_cluster.redis.cache_nodes[0].address}:6379" },
         { name = "DB_DSN", value = "postgres://notif:${var.db_password}@${aws_db_instance.postgres.address}:5432/notifications?sslmode=require" },
-        { name = "FANOUT_THRESHOLD", value = "1000" }
+        { name = "FANOUT_THRESHOLD", value = "1000" },
+        { name = "NOTIFICATION_MODE", value = "FAN_OUT_WRITE" }
       ]
 
       logConfiguration = {
