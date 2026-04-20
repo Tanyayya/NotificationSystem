@@ -50,11 +50,13 @@ type inflightEvent struct {
 
 // Tracker matches subscriber delivery reports to sent events and computes latency.
 type Tracker struct {
-	events  sync.Map
-	Reports chan report
-	Results chan eventResult
-	pool    *SubscriberPool
-	metrics *Metrics
+	events    sync.Map
+	Reports   chan report
+	Results   chan eventResult
+	pool      *SubscriberPool
+	metrics   *Metrics
+	pendingMu sync.Mutex
+	pending   map[int64][]report // reports received before Register was called
 }
 
 func NewTracker(pool *SubscriberPool, metrics *Metrics) *Tracker {
@@ -63,6 +65,7 @@ func NewTracker(pool *SubscriberPool, metrics *Metrics) *Tracker {
 		Results: make(chan eventResult, 256),
 		pool:    pool,
 		metrics: metrics,
+		pending: make(map[int64][]report),
 	}
 }
 
@@ -91,6 +94,15 @@ func (t *Tracker) Register(eventID int64, sentAt time.Time) {
 	}
 	ev.mu.Unlock()
 
+	// Replay any reports that arrived before this event was registered.
+	t.pendingMu.Lock()
+	buffered := t.pending[eventID]
+	delete(t.pending, eventID)
+	t.pendingMu.Unlock()
+	for _, r := range buffered {
+		t.handleReport(r)
+	}
+
 	if ev.total == 0 {
 		t.finalize(eventID)
 	}
@@ -110,10 +122,16 @@ func (t *Tracker) Run(ctx context.Context) {
 }
 
 func (t *Tracker) handleReport(r report) {
+	// Hold pendingMu while checking events so that Register cannot drain
+	// pending between our Load miss and our append.
+	t.pendingMu.Lock()
 	val, ok := t.events.Load(r.eventID)
 	if !ok {
+		t.pending[r.eventID] = append(t.pending[r.eventID], r)
+		t.pendingMu.Unlock()
 		return
 	}
+	t.pendingMu.Unlock()
 	ev := val.(*inflightEvent)
 
 	ev.mu.Lock()

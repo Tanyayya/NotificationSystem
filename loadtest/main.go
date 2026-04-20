@@ -29,6 +29,7 @@ func main() {
 
 	tracker := NewTracker(pool, metrics)
 	pool.tracker = tracker
+	pool.metrics = metrics
 
 	go metrics.ServeHTTP(cfg.MetricsPort)
 
@@ -46,15 +47,18 @@ func main() {
 	ready := make(chan struct{})
 	pool.Start(ctx, ready)
 
-	log.Printf("waiting for %d subscriber connections...", cfg.FollowerCount)
+	log.Printf("waiting for %d subscribers to receive history...", cfg.FollowerCount)
 	select {
 	case <-ready:
-		log.Printf("all %d subscribers connected, starting publisher", cfg.FollowerCount)
-	case <-time.After(2 * time.Minute):
-		log.Printf("timed out waiting for all subscribers (%d/%d active), proceeding anyway",
-			pool.ActiveConns(), cfg.FollowerCount)
+		log.Printf("all %d subscribers received history", cfg.FollowerCount)
 	case <-sigs:
 		log.Println("interrupted before test started")
+		return
+	}
+
+	if cfg.Phase == "1" {
+		metrics.PrintSummary(cfg.Phase)
+		log.Printf("results written to %s", cfg.CSVOut)
 		return
 	}
 
@@ -73,9 +77,7 @@ func main() {
 		cancel()
 	}
 
-	// Wait for in-flight events to drain. Each event self-resolves within the
-	// 2-second per-subscriber timeout, so this should complete quickly.
-	// cfg.EventTimeout is a safety-net outer deadline.
+	// Wait for in-flight events to drain.
 	deadline := time.After(cfg.EventTimeout)
 	poll := time.NewTicker(500 * time.Millisecond)
 	defer poll.Stop()
@@ -95,6 +97,6 @@ wait:
 		}
 	}
 
-	metrics.PrintSummary()
+	metrics.PrintSummary(cfg.Phase)
 	log.Printf("results written to %s", cfg.CSVOut)
 }

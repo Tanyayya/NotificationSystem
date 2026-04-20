@@ -25,27 +25,37 @@ type SubscriberPool struct {
 	followerPrefix string
 	followerStart  int
 	followerCount  int
+	configuredIDs  map[string]struct{}
 	tracker        *Tracker
 	metrics        *Metrics // set before Start (same as tracker)
 	activeConns    atomic.Int64
 	connectedUsers sync.Map // map[string]struct{} — subscribers past dial + history (or first app JSON)
 	wg             sync.WaitGroup
+	historySeen    sync.Map // map[string]struct{} — users who have received at least one history packet
+	historyCount   atomic.Int64
+	historyReady   sync.Once
 }
 
 func NewSubscriberPool(albURL, followerPrefix string, followerStart, followerCount int, tracker *Tracker) *SubscriberPool {
+	configuredIDs := make(map[string]struct{}, followerCount)
+	for i := 0; i < followerCount; i++ {
+		userID := fmt.Sprintf("%s%d", followerPrefix, followerStart+i)
+		configuredIDs[userID] = struct{}{}
+	}
+
 	return &SubscriberPool{
 		albURL:         albURL,
 		followerPrefix: followerPrefix,
 		followerStart:  followerStart,
 		followerCount:  followerCount,
+		configuredIDs:  configuredIDs,
 		tracker:        tracker, // may be set after construction
 	}
 }
 
 // Start spawns all subscriber goroutines. It closes ready once every goroutine
 // has established its first connection (or the context is cancelled).
-func (p *SubscriberPool) Start(ctx context.Context, ready chan<- struct{}) {
-	var connectedOnce atomic.Int64
+func (p *SubscriberPool) Start(ctx context.Context, historyReady chan<- struct{}) {
 	total := int64(p.followerCount)
 
 	for i := 0; i < p.followerCount; i++ {
@@ -53,13 +63,14 @@ func (p *SubscriberPool) Start(ctx context.Context, ready chan<- struct{}) {
 		p.wg.Add(1)
 		go func(uid string) {
 			defer p.wg.Done()
-			notified := false
 			p.connectLoop(ctx, uid, func() {
-				if !notified {
-					notified = true
-					if connectedOnce.Add(1) == total {
-						close(ready)
-					}
+				if _, loaded := p.historySeen.LoadOrStore(uid, struct{}{}); loaded {
+					return
+				}
+				if p.historyCount.Add(1) == total {
+					p.historyReady.Do(func() {
+						close(historyReady)
+					})
 				}
 			})
 		}(userID)
@@ -68,11 +79,9 @@ func (p *SubscriberPool) Start(ctx context.Context, ready chan<- struct{}) {
 
 // connectLoop maintains a single WebSocket connection for a given user, reconnecting
 // with exponential backoff on failure.
-func (p *SubscriberPool) connectLoop(ctx context.Context, userID string, onFirstConnect func()) {
+func (p *SubscriberPool) connectLoop(ctx context.Context, userID string, onFirstHistory func()) {
 	backoff := 500 * time.Millisecond
 	const maxBackoff = 10 * time.Second
-	first := true
-
 	for {
 		if ctx.Err() != nil {
 			return
@@ -92,18 +101,14 @@ func (p *SubscriberPool) connectLoop(ctx context.Context, userID string, onFirst
 			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
+		connectedAt := time.Now()
 
 		p.activeConns.Add(1)
 		p.connectedUsers.Store(userID, struct{}{})
 		log.Printf("subscriber %s: connected", userID)
 		backoff = 500 * time.Millisecond
 
-		if first {
-			first = false
-			onFirstConnect()
-		}
-
-		p.readLoop(ctx, conn, userID)
+		p.readLoop(ctx, conn, userID, connectedAt, onFirstHistory)
 
 		conn.Close()
 		p.connectedUsers.Delete(userID)
@@ -135,13 +140,16 @@ func (p *SubscriberPool) dial(ctx context.Context, userID string) (*websocket.Co
 }
 
 // readLoop reads messages from an open connection until it errors or ctx is done.
-func (p *SubscriberPool) readLoop(ctx context.Context, conn *websocket.Conn, userID string) {
+// connectedAt is the time the WebSocket handshake completed, used to measure connection-to-history latency.
+func (p *SubscriberPool) readLoop(ctx context.Context, conn *websocket.Conn, userID string, connectedAt time.Time, onFirstHistory func()) {
 	// Gateway sends a PING every 30s; we set 90s read deadline so we're dropped
 	// only if two consecutive pings are missed.
 	conn.SetPongHandler(func(_ string) error {
 		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		return nil
 	})
+
+	historyRecorded := false
 
 	for {
 		if ctx.Err() != nil {
@@ -157,8 +165,18 @@ func (p *SubscriberPool) readLoop(ctx context.Context, conn *websocket.Conn, use
 			return
 		}
 
+		receivedAt := time.Now()
+
 		var n wsNotification
 		if err := json.Unmarshal(msg, &n); err != nil {
+			continue
+		}
+		if n.Type == "history" && !historyRecorded {
+			historyRecorded = true
+			if p.metrics != nil {
+				p.metrics.RecordHistoryReceived(userID, connectedAt, receivedAt)
+			}
+			onFirstHistory()
 			continue
 		}
 		// Only track real-time pushes, not history payloads sent on connect.
@@ -166,10 +184,19 @@ func (p *SubscriberPool) readLoop(ctx context.Context, conn *websocket.Conn, use
 			p.tracker.Reports <- report{
 				eventID: n.ID,
 				userID:  userID,
-				at:      time.Now(),
+				at:      receivedAt,
 			}
 		}
 	}
+}
+
+// ConfiguredIDs returns the static configured follower universe for this test run.
+func (p *SubscriberPool) ConfiguredIDs() map[string]struct{} {
+	result := make(map[string]struct{}, len(p.configuredIDs))
+	for userID := range p.configuredIDs {
+		result[userID] = struct{}{}
+	}
+	return result
 }
 
 func (p *SubscriberPool) ActiveConns() int64 {

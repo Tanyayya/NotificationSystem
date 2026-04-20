@@ -18,6 +18,7 @@ type Config struct {
 	CSVOut        string
 	MetricsPort   int
 	EventTimeout  time.Duration
+	Phase         string
 }
 
 func parseConfig() Config {
@@ -33,10 +34,17 @@ func parseConfig() Config {
 	flag.StringVar(&c.CSVOut, "csv-out", "results.csv", "Path to write CSV output")
 	flag.IntVar(&c.MetricsPort, "metrics-port", 9090, "Port for the live metrics HTTP endpoint")
 	flag.DurationVar(&c.EventTimeout, "event-timeout", 30*time.Second, "Max time to wait for all subscribers to receive a single event")
+	flag.StringVar(&c.Phase, "phase", "both", "Which phases to run: \"1\" (history only), \"2\" (notifications only), or \"both\"")
 	flag.Parse()
 
-	if c.ALBURL == "" || c.IngestionURL == "" || c.SenderUser == "" {
-		log.Fatal("--alb-url, --ingestion-url, and --sender-user are required")
+	if c.Phase != "1" && c.Phase != "2" && c.Phase != "both" {
+		log.Fatal("--phase must be \"1\", \"2\", or \"both\"")
+	}
+	if c.ALBURL == "" {
+		log.Fatal("--alb-url is required")
+	}
+	if c.Phase != "1" && (c.IngestionURL == "" || c.SenderUser == "") {
+		log.Fatal("--ingestion-url and --sender-user are required for phase 2")
 	}
 	if c.EventRate <= 0 {
 		log.Fatal("--event-rate must be > 0")

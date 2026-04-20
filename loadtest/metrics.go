@@ -21,9 +21,11 @@ type Metrics struct {
 	eventsPartial         atomic.Int64
 	eventsInFlight        atomic.Int64
 	notificationsReceived atomic.Int64
+	historiesReceived     atomic.Int64
 
-	mu        sync.RWMutex
-	latencies []int64 // max latency per completed event, for rolling percentiles
+	mu               sync.RWMutex
+	latencies        []int64 // max latency per completed event, for rolling percentiles
+	historyLatencies []int64 // connect-to-first-message latency per connection
 
 	csvWriter *csv.Writer
 	csvFile   *os.File
@@ -81,6 +83,25 @@ func (m *Metrics) RecordNotificationReceived(eventID int64, userID string, sentA
 	m.mu.Unlock()
 }
 
+// RecordHistoryReceived writes a "history_received" row to the CSV and records
+// the latency from WebSocket connection established to first history message.
+func (m *Metrics) RecordHistoryReceived(userID string, connectedAt time.Time, receivedAt time.Time) {
+	latencyMS := receivedAt.Sub(connectedAt).Milliseconds()
+	m.historiesReceived.Add(1)
+	m.mu.Lock()
+	m.historyLatencies = append(m.historyLatencies, latencyMS)
+	m.csvWriter.Write([]string{
+		"history_received",
+		"",
+		strconv.FormatInt(connectedAt.UnixMilli(), 10),
+		userID,
+		strconv.FormatInt(receivedAt.UnixMilli(), 10),
+		strconv.FormatInt(latencyMS, 10),
+	})
+	m.csvWriter.Flush()
+	m.mu.Unlock()
+}
+
 // RecordNotDelivered writes a "not_delivered" row to the CSV for a subscriber that
 // was still connected but did not receive the notification within the 2-second window.
 func (m *Metrics) RecordNotDelivered(eventID int64, userID string, sentAt time.Time) {
@@ -111,26 +132,38 @@ func (m *Metrics) snapshot() map[string]any {
 	m.mu.RLock()
 	sorted := make([]int64, len(m.latencies))
 	copy(sorted, m.latencies)
+	historySorted := make([]int64, len(m.historyLatencies))
+	copy(historySorted, m.historyLatencies)
 	m.mu.RUnlock()
 
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	sort.Slice(historySorted, func(i, j int) bool { return historySorted[i] < historySorted[j] })
 
 	var maxLat int64
 	if len(sorted) > 0 {
 		maxLat = sorted[len(sorted)-1]
 	}
+	var maxHistoryLat int64
+	if len(historySorted) > 0 {
+		maxHistoryLat = historySorted[len(historySorted)-1]
+	}
 
 	return map[string]any{
-		"events_sent":             m.eventsSent.Load(),
-		"events_complete":         m.eventsComplete.Load(),
-		"events_partial":          m.eventsPartial.Load(),
-		"events_in_flight":        m.eventsInFlight.Load(),
-		"notifications_received":  m.notificationsReceived.Load(),
-		"ws_connections_active":   m.pool.ActiveConns(),
-		"latency_p50_ms":          percentile(sorted, 50),
-		"latency_p95_ms":          percentile(sorted, 95),
-		"latency_p99_ms":          percentile(sorted, 99),
-		"latency_max_ms":          maxLat,
+		"events_sent":              m.eventsSent.Load(),
+		"events_complete":          m.eventsComplete.Load(),
+		"events_partial":           m.eventsPartial.Load(),
+		"events_in_flight":         m.eventsInFlight.Load(),
+		"notifications_received":   m.notificationsReceived.Load(),
+		"histories_received":       m.historiesReceived.Load(),
+		"ws_connections_active":    m.pool.ActiveConns(),
+		"latency_p50_ms":           percentile(sorted, 50),
+		"latency_p95_ms":           percentile(sorted, 95),
+		"latency_p99_ms":           percentile(sorted, 99),
+		"latency_max_ms":           maxLat,
+		"history_latency_p50_ms":   percentile(historySorted, 50),
+		"history_latency_p95_ms":   percentile(historySorted, 95),
+		"history_latency_p99_ms":   percentile(historySorted, 99),
+		"history_latency_max_ms":   maxHistoryLat,
 	}
 }
 
@@ -163,16 +196,28 @@ func (m *Metrics) Close() {
 	m.csvFile.Close()
 }
 
-func (m *Metrics) PrintSummary() {
+func (m *Metrics) PrintSummary(phase string) {
 	snap := m.snapshot()
 	fmt.Println("\n=== Load Test Summary ===")
-	fmt.Printf("Events sent:            %v\n", snap["events_sent"])
-	fmt.Printf("Events complete:        %v\n", snap["events_complete"])
-	fmt.Printf("Events partial/timeout: %v\n", snap["events_partial"])
-	fmt.Printf("Events in-flight:       %v\n", snap["events_in_flight"])
-	fmt.Printf("Notifications received: %v\n", snap["notifications_received"])
-	fmt.Printf("Latency p50:            %v ms\n", snap["latency_p50_ms"])
-	fmt.Printf("Latency p95:            %v ms\n", snap["latency_p95_ms"])
-	fmt.Printf("Latency p99:            %v ms\n", snap["latency_p99_ms"])
-	fmt.Printf("Latency max:            %v ms\n", snap["latency_max_ms"])
+	if phase == "1" || phase == "both" {
+		fmt.Printf("Histories received:       %v\n", snap["histories_received"])
+		fmt.Printf("History latency p50:      %v ms\n", snap["history_latency_p50_ms"])
+		fmt.Printf("History latency p95:      %v ms\n", snap["history_latency_p95_ms"])
+		fmt.Printf("History latency p99:      %v ms\n", snap["history_latency_p99_ms"])
+		fmt.Printf("History latency max:      %v ms\n", snap["history_latency_max_ms"])
+	}
+	if phase == "2" || phase == "both" {
+		if phase == "both" {
+			fmt.Println()
+		}
+		fmt.Printf("Events sent:              %v\n", snap["events_sent"])
+		fmt.Printf("Events complete:          %v\n", snap["events_complete"])
+		fmt.Printf("Events partial/timeout:   %v\n", snap["events_partial"])
+		fmt.Printf("Events in-flight:         %v\n", snap["events_in_flight"])
+		fmt.Printf("Notifications received:   %v\n", snap["notifications_received"])
+		fmt.Printf("Notification latency p50: %v ms\n", snap["latency_p50_ms"])
+		fmt.Printf("Notification latency p95: %v ms\n", snap["latency_p95_ms"])
+		fmt.Printf("Notification latency p99: %v ms\n", snap["latency_p99_ms"])
+		fmt.Printf("Notification latency max: %v ms\n", snap["latency_max_ms"])
+	}
 }

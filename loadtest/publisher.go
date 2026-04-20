@@ -73,6 +73,11 @@ func (p *Publisher) postEvent(ctx context.Context) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	// Record sentAt before the request so the event is registered in the tracker
+	// before the fanout pipeline can deliver the notification to subscribers.
+	// The ingestion service publishes to Kafka before returning 200, so in a fast
+	// local environment the WebSocket push can arrive before Do() returns.
+	sentAt := time.Now()
 	resp, err := p.client.Do(req)
 	if err != nil {
 		log.Printf("publisher: POST /event: %v", err)
@@ -91,10 +96,8 @@ func (p *Publisher) postEvent(ctx context.Context) {
 		return
 	}
 
-	// t1 is recorded after the 200 OK — the event is confirmed in Kafka at this point.
-	t1 := time.Now()
-	p.tracker.Register(evResp.EventID, t1)
-	p.metrics.RecordEventSent(evResp.EventID, t1)
+	p.tracker.Register(evResp.EventID, sentAt)
+	p.metrics.RecordEventSent(evResp.EventID, sentAt)
 	p.metrics.IncInFlight()
 
 	log.Printf("publisher: event_id=%d registered", evResp.EventID)
