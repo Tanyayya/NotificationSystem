@@ -44,6 +44,22 @@ resource "aws_iam_role" "ecs_task_role" {
   }
 }
 
+resource "aws_iam_role_policy" "ecs_task_cloudwatch" {
+  name = "${var.project_name}-ecs-task-policy"
+  role = aws_iam_role.ecs_task_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "cloudwatch:PutMetricData"
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # CloudWatch Log Groups — one per service
 resource "aws_cloudwatch_log_group" "gateway" {
   name              = "/ecs/${var.project_name}/gateway"

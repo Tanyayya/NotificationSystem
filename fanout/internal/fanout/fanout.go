@@ -2,6 +2,7 @@ package fanout
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"github.com/Tanyayya/NotificationSystem/fanout/internal/consumer"
@@ -26,23 +27,21 @@ const (
 //
 // For each event it:
 //  1. Looks up the follower list from PostgreSQL
-//  2. Chooses fan-out on write or fan-out on read based on mode (and threshold for HYBRID)
+//  2. Chooses fan-out on write or fan-out on read based on follower count
 //  3. Fan-out on write: persists one notification per follower + publishes to Redis
 //  4. Fan-out on read:  persists one event record (stub — read path not yet implemented)
 type FanOuter struct {
 	db        *db.DB
 	publisher *notif.Publisher
-	threshold int  // follower count above which HYBRID switches to fan-out on read
-	mode      Mode // fan-out strategy: FAN_OUT_READ, FAN_OUT_WRITE, or HYBRID
+	threshold int // follower count above which we switch to fan-out on read
 }
 
-// New creates a FanOuter with the given DB, Redis publisher, threshold, and mode.
-func New(database *db.DB, publisher *notif.Publisher, threshold int, mode Mode) *FanOuter {
+// New creates a FanOuter with the given DB, Redis publisher, and fan-out threshold.
+func New(database *db.DB, publisher *notif.Publisher, threshold int) *FanOuter {
 	return &FanOuter{
 		db:        database,
 		publisher: publisher,
 		threshold: threshold,
-		mode:      mode,
 	}
 }
 
@@ -50,13 +49,7 @@ func New(database *db.DB, publisher *notif.Publisher, threshold int, mode Mode) 
 // fromUser is the Kafka message key — the person who triggered the event.
 // The fan-out worker calls this once per Kafka message.
 func (f *FanOuter) Publish(ctx context.Context, fromUser string, ev consumer.NotificationEvent) error {
-	// FAN_OUT_READ skips the follower lookup — one event record stored, no per-follower writes.
-	if f.mode == ModeRead {
-		log.Printf("fanout: mode=%s user=%q", f.mode, fromUser)
-		return f.fanoutOnRead(ctx, ev)
-	}
-
-	// All other modes need the follower list.
+	// Step 1: look up all followers of fromUser
 	followers, err := f.db.GetFollowers(ctx, fromUser)
 	if err != nil {
 		return err
@@ -67,17 +60,13 @@ func (f *FanOuter) Publish(ctx context.Context, fromUser string, ev consumer.Not
 		return nil
 	}
 
-	switch f.mode {
-	case ModeWrite:
-		log.Printf("fanout: mode=%s user=%q followers=%d", f.mode, fromUser, len(followers))
+	log.Printf("fanout: user=%q followers=%d threshold=%d", fromUser, len(followers), f.threshold)
+
+	// Step 2: choose strategy based on follower count
+	if len(followers) <= f.threshold {
 		return f.fanoutOnWrite(ctx, followers, ev)
-	default: // ModeHybrid
-		log.Printf("fanout: mode=%s user=%q followers=%d threshold=%d", f.mode, fromUser, len(followers), f.threshold)
-		if len(followers) <= f.threshold {
-			return f.fanoutOnWrite(ctx, followers, ev)
-		}
-		return f.fanoutOnRead(ctx, ev)
 	}
+	return f.fanoutOnRead(ctx, ev)
 }
 
 // fanoutOnWrite is the write path — used for normal users under the threshold.
@@ -85,6 +74,8 @@ func (f *FanOuter) Publish(ctx context.Context, fromUser string, ev consumer.Not
 // then pipelined Redis PUBLISH to notif:{followerID}. If batch insert fails, falls back
 // to per-follower insert + publish for that chunk.
 //
+// If ANY PostgreSQL insert fails, the function returns an error so the
+// Kafka offset is not committed and the message is retried.
 // Redis publish errors are logged but do not stop processing —
 // notifications are already persisted and will be replayed on reconnect.
 func (f *FanOuter) fanoutOnWrite(ctx context.Context, followers []string, ev consumer.NotificationEvent) error {
@@ -117,16 +108,18 @@ func (f *FanOuter) fanoutOnWrite(ctx context.Context, followers []string, ev con
 		publishErrors += n
 	}
 
+	// if any recipients failed, return an error so kafka-consumer.go skips CommitMessages
+	// Kafka will redeliver the message and we retry — ON CONFLICT DO NOTHING handles duplicates
 	if publishErrors > 0 {
-		log.Printf("fanout-on-write: %d redis publish errors (notifications persisted, will replay on reconnect)", publishErrors)
+		return fmt.Errorf("fanout-on-write: %d/%d recipients failed, skipping kafka commit for retry",
+			publishErrors, len(followers))
 	}
 
-	log.Printf("fanout-on-write: done event id=%d recipients=%d errors=%d",
-		ev.ID, len(followers), publishErrors)
+	log.Printf("fanout-on-write: done event id=%d recipients=%d", ev.ID, len(followers))
 	return nil
 }
 
-// fanoutOnWriteRowByRow is the per-follower insert + publish path used as a fallback when batch insert fails.
+// fanoutOnWriteRowByRow is the per-follower insert + publish fallback used when batch insert fails.
 func (f *FanOuter) fanoutOnWriteRowByRow(ctx context.Context, followers []string, ev consumer.NotificationEvent) int {
 	var publishErrors int
 	for _, followerID := range followers {

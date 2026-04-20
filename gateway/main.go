@@ -1,8 +1,18 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"log"
 	"net/http"
+	"runtime"
+	"sync/atomic"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 
 	"github.com/Tanyayya/NotificationSystem/gateway/internal/history"
 )
@@ -37,6 +47,43 @@ func main() {
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+
+	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"goroutine_count":    runtime.NumGoroutine(),
+			"heap_inuse_mb":      float64(ms.HeapInuse) / (1024 * 1024),
+			"active_connections": atomic.LoadInt64(&activeConnections),
+		})
+	})
+
+	go func() {
+		cfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion("us-east-1"))
+		if err != nil {
+			log.Printf("cloudwatch: failed to load config: %v", err)
+			return
+		}
+		cw := cloudwatch.NewFromConfig(cfg)
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			var ms runtime.MemStats
+			runtime.ReadMemStats(&ms)
+			_, err := cw.PutMetricData(context.Background(), &cloudwatch.PutMetricDataInput{
+				Namespace: aws.String("NotifSystem/Gateway"),
+				MetricData: []types.MetricDatum{
+					{MetricName: aws.String("GoroutineCount"), Value: aws.Float64(float64(runtime.NumGoroutine())), Unit: types.StandardUnitCount},
+					{MetricName: aws.String("HeapInuseMB"), Value: aws.Float64(float64(ms.HeapInuse) / (1024 * 1024)), Unit: types.StandardUnitNone},
+					{MetricName: aws.String("ActiveConnections"), Value: aws.Float64(float64(atomic.LoadInt64(&activeConnections))), Unit: types.StandardUnitCount},
+				},
+			})
+			if err != nil {
+				log.Printf("cloudwatch: PutMetricData: %v", err)
+			}
+		}
+	}()
 
 	log.Println("Gateway listening on :8080")
 
