@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"sync/atomic"
+
 	"github.com/Tanyayya/NotificationSystem/gateway/internal/history"
 	"github.com/gorilla/websocket"
 )
@@ -17,6 +19,8 @@ const (
 	pingInterval = 30 * time.Second // must be well under ALB idle timeout (60s)
 	pongDeadline = 60 * time.Second // if no pong within this window, treat client as dead
 )
+
+var activeConnections int64
 
 // upgrader upgrades a regular HTTP connection to a WebSocket connection.
 // CheckOrigin is set to allow all origins for now — tighten this in production.
@@ -123,6 +127,9 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 	if err := registerUser(ctx, userID, taskID); err != nil {
 		log.Printf("failed to register user %s: %v", userID, err)
 	}
+
+	atomic.AddInt64(&activeConnections, 1)
+	defer atomic.AddInt64(&activeConnections, -1)
 
 	log.Printf("user %s connected", userID)
 

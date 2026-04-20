@@ -3,43 +3,33 @@ package fanout
 import (
 	"context"
 	"log"
+	"fmt"
 
 	"github.com/Tanyayya/NotificationSystem/fanout/internal/consumer"
 	"github.com/Tanyayya/NotificationSystem/fanout/internal/db"
 	"github.com/Tanyayya/NotificationSystem/fanout/internal/notif"
 )
 
-// Mode controls which fan-out strategy the worker uses.
-type Mode string
-
-const (
-	ModeRead   Mode = "FAN_OUT_READ"
-	ModeWrite  Mode = "FAN_OUT_WRITE"
-	ModeHybrid Mode = "FAN_OUT_HYBRID"
-)
-
 // FanOuter sits between the Kafka consumer and the Redis publisher.
 // It implements consumer.Notifier so it can be passed directly to consumer.Run.
 //
 // For each event it:
-//  1. Looks up the follower list from PostgreSQL
-//  2. Chooses fan-out on write or fan-out on read based on mode (and threshold for HYBRID)
-//  3. Fan-out on write: persists one notification per follower + publishes to Redis
-//  4. Fan-out on read:  persists one event record (stub — read path not yet implemented)
+//   1. Looks up the follower list from PostgreSQL
+//   2. Chooses fan-out on write or fan-out on read based on follower count
+//   3. Fan-out on write: persists one notification per follower + publishes to Redis
+//   4. Fan-out on read:  persists one event record (stub — read path not yet implemented)
 type FanOuter struct {
 	db        *db.DB
 	publisher *notif.Publisher
-	threshold int  // follower count above which HYBRID switches to fan-out on read
-	mode      Mode // fan-out strategy: FAN_OUT_READ, FAN_OUT_WRITE, or HYBRID
+	threshold int // follower count above which we switch to fan-out on read
 }
 
-// New creates a FanOuter with the given DB, Redis publisher, threshold, and mode.
-func New(database *db.DB, publisher *notif.Publisher, threshold int, mode Mode) *FanOuter {
+// New creates a FanOuter with the given DB, Redis publisher, and fan-out threshold.
+func New(database *db.DB, publisher *notif.Publisher, threshold int) *FanOuter {
 	return &FanOuter{
 		db:        database,
 		publisher: publisher,
 		threshold: threshold,
-		mode:      mode,
 	}
 }
 
@@ -47,13 +37,7 @@ func New(database *db.DB, publisher *notif.Publisher, threshold int, mode Mode) 
 // fromUser is the Kafka message key — the person who triggered the event.
 // The fan-out worker calls this once per Kafka message.
 func (f *FanOuter) Publish(ctx context.Context, fromUser string, ev consumer.NotificationEvent) error {
-	// FAN_OUT_READ skips the follower lookup — one event record stored, no per-follower writes.
-	if f.mode == ModeRead {
-		log.Printf("fanout: mode=%s user=%q", f.mode, fromUser)
-		return f.fanoutOnRead(ctx, ev)
-	}
-
-	// All other modes need the follower list.
+	// Step 1: look up all followers of fromUser
 	followers, err := f.db.GetFollowers(ctx, fromUser)
 	if err != nil {
 		return err
@@ -64,17 +48,13 @@ func (f *FanOuter) Publish(ctx context.Context, fromUser string, ev consumer.Not
 		return nil
 	}
 
-	switch f.mode {
-	case ModeWrite:
-		log.Printf("fanout: mode=%s user=%q followers=%d", f.mode, fromUser, len(followers))
+	log.Printf("fanout: user=%q followers=%d threshold=%d", fromUser, len(followers), f.threshold)
+
+	// Step 2: choose strategy based on follower count
+	if len(followers) <= f.threshold {
 		return f.fanoutOnWrite(ctx, followers, ev)
-	default: // ModeHybrid
-		log.Printf("fanout: mode=%s user=%q followers=%d threshold=%d", f.mode, fromUser, len(followers), f.threshold)
-		if len(followers) <= f.threshold {
-			return f.fanoutOnWrite(ctx, followers, ev)
-		}
-		return f.fanoutOnRead(ctx, ev)
 	}
+	return f.fanoutOnRead(ctx, ev)
 }
 
 // fanoutOnWrite is the write path — used for normal users under the threshold.
@@ -82,34 +62,38 @@ func (f *FanOuter) Publish(ctx context.Context, fromUser string, ev consumer.Not
 //   - writes a notification record to PostgreSQL (delivered=false)
 //   - publishes to notif:{followerID} on Redis Pub/Sub
 //
-// Redis publish errors are logged but do not stop the loop —
+// If ANY PostgreSQL insert fails, the function returns an error so the
+// Kafka offset is not committed and the message is retried.
+// Redis publish errors are logged but do not trigger a retry —
 // the notification is already persisted and will be replayed on reconnect.
 func (f *FanOuter) fanoutOnWrite(ctx context.Context, followers []string, ev consumer.NotificationEvent) error {
 	log.Printf("fanout-on-write: event id=%d type=%q from=%q recipients=%d",
 		ev.ID, ev.Type, ev.FromUser, len(followers))
 
-	var publishErrors int
+	var insertErrors int
 	for _, followerID := range followers {
-		// persist to PostgreSQL — ensures offline users get it on reconnect
+		// persist to PostgreSQL — if this fails we must not commit the Kafka offset
 		if err := f.db.InsertNotification(ctx, followerID, ev); err != nil {
 			log.Printf("fanout-on-write: insert notification follower=%q: %v", followerID, err)
-			continue
+			insertErrors++
+			continue // skip Redis publish for this follower — no point publishing if not persisted
 		}
 
 		// publish to Redis Pub/Sub — delivers to online users instantly
+		// Redis errors are non-fatal since notification is already persisted
 		if err := f.publisher.Publish(ctx, followerID, ev); err != nil {
 			log.Printf("fanout-on-write: redis publish follower=%q: %v", followerID, err)
-			publishErrors++
-			// don't return — notification is persisted, continue to next follower
 		}
 	}
 
-	if publishErrors > 0 {
-		log.Printf("fanout-on-write: %d redis publish errors (notifications persisted, will replay on reconnect)", publishErrors)
+	// if any inserts failed, return an error so kafka-consumer.go skips CommitMessages
+	// Kafka will redeliver the message and we retry — ON CONFLICT DO NOTHING handles duplicates
+	if insertErrors > 0 {
+		return fmt.Errorf("fanout-on-write: %d/%d inserts failed, skipping kafka commit for retry",
+			insertErrors, len(followers))
 	}
 
-	log.Printf("fanout-on-write: done event id=%d recipients=%d errors=%d",
-		ev.ID, len(followers), publishErrors)
+	log.Printf("fanout-on-write: done event id=%d recipients=%d", ev.ID, len(followers))
 	return nil
 }
 
