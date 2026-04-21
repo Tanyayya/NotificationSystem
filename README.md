@@ -6,6 +6,16 @@ When a user triggers an event (like, follow, post, etc.), every relevant subscri
 
 ---
 
+## Overview
+
+This project is a research platform for studying fan-out strategies and WebSocket scalability in a realistic notification pipeline. It is intentionally instrumented for benchmarking rather than production hardening.
+
+**How an event becomes a notification:**
+
+A client posts an event (like, follow, post) to the **Ingestion API**, which stamps it with a Snowflake ID for global ordering and publishes it to **Kafka**, partitioned by sender so per-user ordering is preserved. **Fan-out workers** consume that Kafka topic and, depending on `NOTIFICATION_MODE`, either write a notification row to **PostgreSQL** for every follower (write path), defer to a query at read time (read path), or switch between the two based on follower count (hybrid). Regardless of path, the workers also publish to a **Redis Pub/Sub** channel for the recipient. The **WebSocket Gateway** holds a persistent connection per user; when a message arrives on that user's Redis channel, the gateway pushes it over the socket immediately. On first connect, the gateway also fetches unread history from **PostgreSQL** via the Read API and delivers it as a history envelope before live events begin.
+
+---
+
 ## Local Setup
 
 Requires **Docker** and **Docker Compose v2**. From the repo root:
